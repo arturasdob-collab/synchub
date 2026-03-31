@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/lib/auth/AuthProvider';
-import { supabase } from '@/lib/supabase/client';
+import { createClient } from '@/lib/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Building2, Users, Globe, Shield } from 'lucide-react';
 import { Organization } from '@/lib/types/database';
+
+const supabase = createClient();
 
 export default function DashboardPage() {
   const { profile } = useAuth();
@@ -27,12 +29,42 @@ export default function DashboardPage() {
         setOrganization(orgData);
       }
 
-      const { count } = await supabase
-        .from('user_profiles')
-        .select('*', { count: 'exact', head: true })
-        .eq('organization_id', profile.organization_id);
-
-      setUserCount(count || 0);
+      let query = supabase
+      .from('user_profiles')
+      .select('*', { count: 'exact', head: true });
+    
+      if (profile.is_super_admin) {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+      
+        if (session?.access_token) {
+          const res = await fetch('/api/admin/users', {
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${session.access_token}`,
+            },
+          });
+      
+          const json = await res.json();
+      
+          if (res.ok) {
+            setUserCount((json.users || []).length);
+          } else {
+            setUserCount(0);
+          }
+        } else {
+          setUserCount(0);
+        }
+      } else {
+        const { count } = await supabase
+          .from('user_profiles')
+          .select('*', { count: 'exact', head: true })
+          .eq('organization_id', profile.organization_id);
+      
+        setUserCount(count || 0);
+      }
+      
       setLoading(false);
     };
 

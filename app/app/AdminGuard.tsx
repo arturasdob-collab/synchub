@@ -14,14 +14,25 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
 
   const showDebug = searchParams.get('debug') === '1';
   const isAdminPath = pathname?.startsWith('/app/admin');
-  const isAdmin = profile?.role === 'OWNER' || profile?.role === 'ADMIN';
+  const isAdmin =
+    !!profile?.is_super_admin ||
+    profile?.role === 'OWNER' ||
+    profile?.role === 'ADMIN';
+  
+  const isCompaniesPath = pathname?.startsWith('/app/companies');
+  const organizationName = ((profile as any)?.organizations?.name ?? '').trim().toLowerCase();
+  const isPartnerOrg = organizationName !== 'tempus trans';
 
   useEffect(() => {
     if (isAdminPath && !loading && profile) {
-      const adminCheck = profile.role === 'OWNER' || profile.role === 'ADMIN';
+      const adminCheck =
+        profile.is_super_admin ||
+        profile.role === 'OWNER' ||
+        profile.role === 'ADMIN';
+  
       if (!adminCheck) {
         setWillRedirect(true);
-
+  
         // If debug mode is on, delay the redirect by 2 seconds
         if (showDebug) {
           setRedirectCountdown(2);
@@ -99,25 +110,30 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // Admin path logic (without debug)
-  if (isAdminPath) {
-    // Show loading while checking permissions
-    if (loading || !profile) {
-      return (
-        <div className="min-h-screen flex items-center justify-center bg-slate-50">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-slate-900 mx-auto"></div>
-            <p className="mt-4 text-slate-600">Loading...</p>
-          </div>
+// Protected path logic
+if (isAdminPath || isCompaniesPath) {
+  if (loading || !profile) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-slate-900 mx-auto"></div>
+          <p className="mt-4 text-slate-600">Loading...</p>
         </div>
-      );
-    }
-
-    // If not admin, don't render anything (redirect is happening)
-    if (!isAdmin || willRedirect) {
-      return null;
-    }
+      </div>
+    );
   }
+
+  // Partner organizations cannot access admin or companies
+  if (isPartnerOrg && (isAdminPath || isCompaniesPath)) {
+    router.replace('/app');
+    return null;
+  }
+
+  // Admin section still requires admin role
+  if (isAdminPath && (!isAdmin || willRedirect)) {
+    return null;
+  }
+}
 
   // Render children for admin users or non-admin paths
   return <>{children}</>;

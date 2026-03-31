@@ -5,17 +5,22 @@ import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { AuthProvider, useAuth } from '@/lib/auth/AuthProvider';
 import { Button } from '@/components/ui/button';
-import { LayoutDashboard, Settings, Building2, LogOut, Menu, Users, Shield } from 'lucide-react';
+import { LayoutDashboard, Users, Settings, Menu, Building2, FileText, LogOut, ShieldCheck, Truck } from 'lucide-react';
 import { useState } from 'react';
 import { AdminGuard } from './AdminGuard';
 
 function AppLayoutContent({ children }: { children: React.ReactNode }) {
   const { user, profile, loading, signOut } = useAuth();
+  console.log("SIDEBAR PROFILE:", profile);
+  console.log("is_super_admin:", profile?.is_super_admin);
+  
   const router = useRouter();
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const isAdmin = profile?.role === 'OWNER' || profile?.role === 'ADMIN';
+  const isAdmin = profile?.is_super_admin || profile?.role === 'OWNER' || profile?.role === 'ADMIN';
+  const organizationName = ((profile as any)?.organizations?.name ?? '').trim().toLowerCase();
+  const isPartnerOrg = organizationName !== 'tempus trans';
 
   useEffect(() => {
     // Don't do anything while still loading
@@ -29,7 +34,7 @@ function AppLayoutContent({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    // Don't proceed with other checks if profile isn't loaded yet
+    // Don't proceed with other checks if profile isn'f loaded yet
     if (!profile) {
       return;
     }
@@ -62,13 +67,29 @@ function AppLayoutContent({ children }: { children: React.ReactNode }) {
     router.push('/login');
   };
 
-  const mainNavigation = [
-    { name: 'Dashboard', href: '/app', icon: LayoutDashboard },
-  ];
+  const navigation = isPartnerOrg
+  ? [
+      { name: 'Dashboard', href: '/app', icon: LayoutDashboard },
+    ]
+  : [
+      { name: 'Dashboard', href: '/app', icon: LayoutDashboard },
+      { name: 'Companies', href: '/app/companies', icon: Building2 },
+      { name: 'Trips', href: '/app/trips', icon: Truck },
+    ];
 
-  const adminNavigation = isAdmin ? [
-    { name: 'Manage Users', href: '/app/admin/users', icon: Users },
-  ] : [];
+const canViewAuditLog =
+  !!profile && ((profile as any).is_super_admin || (profile as any).is_creator);
+
+const adminNavigation =
+  isAdmin && !isPartnerOrg
+    ? [
+        { name: 'Manage Users', href: '/app/admin/users', icon: Users },
+        { name: 'Manage Organizations', href: '/app/admin/organizations', icon: Building2 },
+        ...(canViewAuditLog
+          ? [{ name: 'Audit Log', href: '/app/admin/audit-log', icon: FileText }]
+          : []),
+      ]
+    : [];
 
   const accountNavigation = [
     { name: 'Settings', href: '/app/settings', icon: Settings },
@@ -113,7 +134,7 @@ function AppLayoutContent({ children }: { children: React.ReactNode }) {
 
             <nav className="flex-1 p-4 space-y-6 overflow-y-auto">
               <div>
-                {mainNavigation.map((item) => {
+                {navigation.map((item) => {
                   const isActive = pathname === item.href;
                   return (
                     <Link
@@ -139,7 +160,7 @@ function AppLayoutContent({ children }: { children: React.ReactNode }) {
                 <div>
                   <div className="px-4 mb-2">
                     <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-2">
-                      <Shield className="h-3 w-3" />
+                      <ShieldCheck className="h-3 w-3" />
                       Admin
                     </h3>
                   </div>
@@ -198,7 +219,7 @@ function AppLayoutContent({ children }: { children: React.ReactNode }) {
             <div className="p-4 border-t border-slate-200">
               <div className="mb-4 px-4">
                 <p className="text-sm font-medium text-slate-900">{profile.full_name || profile.email}</p>
-                <p className="text-xs text-slate-500">{profile.role}</p>
+                <p className="text-xs text-slate-500">{profile?.is_super_admin ? 'SUPER_ADMIN' : profile?.role}</p>
               </div>
               <Button
                 variant="ghost"

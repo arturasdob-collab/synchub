@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth/AuthProvider';
 import { supabase } from '@/lib/supabase/client';
@@ -10,42 +10,117 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger
+} from '@/components/ui/alert-dialog';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Shield, Loader2, Check, Ban, CheckCircle, UserPlus, AlertCircle } from 'lucide-react';
+import { Shield, Loader2, Check, Ban, CheckCircle, UserPlus, AlertCircle, Eye, EyeOff, UserCog } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 
-const ROLE_OPTIONS: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER', 'ACCOUNTANT', 'FINANCE'];
+type UserRow = UserProfile & {
+  first_name?: string | null;
+  last_name?: string | null;
+  is_pending?: boolean;
+  is_super_admin: boolean;
+  is_creator: boolean;
+  organizations: { name: string } | null;
+};
+type RoleSelect = UserRole | 'SUPER_ADMIN';
 
+const ROLE_OPTIONS: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER', 'ACCOUNTANT', 'FINANCE'];
 const NON_ADMIN_ROLES: UserRole[] = ['MANAGER', 'ACCOUNTANT', 'FINANCE'];
 const ADMIN_ROLES: UserRole[] = ['OWNER', 'ADMIN'];
+
+function passwordRules(pw: string) {
+  return {
+    min10: pw.length >= 10,
+    lower: /[a-z]/.test(pw),
+    upper: /[A-Z]/.test(pw),
+    number: /\d/.test(pw),
+    symbol: /[^A-Za-z0-9]/.test(pw),
+  };
+}
 
 export default function AdminUsersPage() {
   const router = useRouter();
   const { profile, loading: authLoading } = useAuth();
-  const [users, setUsers] = useState<UserProfile[]>([]);
+
+  const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [pendingChanges, setPendingChanges] = useState<Record<string, UserRole>>({});
+  const [pendingChanges, setPendingChanges] = useState<Record<string, RoleSelect>>({});
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
   const [togglingUserId, setTogglingUserId] = useState<string | null>(null);
+
+  // INVITE
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<UserRole>('MANAGER');
+  const [inviteOrganizationId, setInviteOrganizationId] = useState('');
+  const [organizations, setOrganizations] = useState<{ id: string; name: string }[]>([]);
   const [sendingInvite, setSendingInvite] = useState(false);
+  const [organizationModalOpen, setOrganizationModalOpen] = useState(false);
+  const [organizationName, setOrganizationName] = useState('');
+  const [creatingOrganization, setCreatingOrganization] = useState(false);
+  const [deletingOrganizationId, setDeletingOrganizationId] = useState<string | null>(null);
+  const [organizationError, setOrganizationError] = useState('');
 
-  const canModifyUser = (targetUser: UserProfile, newRole?: UserRole): { allowed: boolean; reason?: string } => {
+  // CREATE (UI)
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createOrganizationId, setCreateOrganizationId] = useState('');
+  const [createFirstName, setCreateFirstName] = useState('');
+  const [createLastName, setCreateLastName] = useState('');
+  const [createEmail, setCreateEmail] = useState('');
+  const [createRole, setCreateRole] = useState<UserRole>('MANAGER');
+  const [createPassword, setCreatePassword] = useState('');
+  const [createConfirmPassword, setCreateConfirmPassword] = useState('');
+  const [createShowPasswords, setCreateShowPasswords] = useState(false);
+  const [creating, setCreating] = useState(false);
+
+  const createPwRules = useMemo(() => passwordRules(createPassword), [createPassword]);
+  const createPwOk =
+    createPwRules.min10 && createPwRules.lower && createPwRules.upper && createPwRules.number && createPwRules.symbol;
+  const createPwMatch = createConfirmPassword.length > 0 && createConfirmPassword === createPassword;
+
+  const isSuperAdmin = !!(profile as any)?.is_super_admin;
+
+  console.log("ADMIN USERS PAGE RENDER", {
+    authLoading,
+    profile,
+    isSuperAdmin,
+    loading,
+    usersCount: users.length,
+  });
+
+  const canModifyUser = (targetUser: UserProfile, newRole?: RoleSelect): { allowed: boolean; reason?: string } => {
     if (!profile) return { allowed: false, reason: 'Not authenticated' };
 
     if (targetUser.id === profile.id) {
       return { allowed: false, reason: 'You cannot modify your own account' };
     }
 
+    // SUPER_ADMIN can modify anyone (including assigning SUPER_ADMIN)
+    if (isSuperAdmin) return { allowed: true };
+
     const isOwner = profile.role === 'OWNER';
-    const roleToCheck = newRole || targetUser.role;
+
+    // non-super-admin cannot assign SUPER_ADMIN
+    if (newRole === 'SUPER_ADMIN') {
+      return { allowed: false, reason: 'Only SUPER_ADMIN can assign SUPER_ADMIN' };
+    }
+
+    const roleToCheck = (newRole || targetUser.role) as UserRole;
 
     if (!isOwner) {
       if (ADMIN_ROLES.includes(targetUser.role) || ADMIN_ROLES.includes(roleToCheck)) {
@@ -56,48 +131,58 @@ export default function AdminUsersPage() {
     return { allowed: true };
   };
 
-  const canDisableUser = (targetUser: UserProfile): { allowed: boolean; reason?: string } => {
+  const canDisableUser = (targetUser: UserRow): { allowed: boolean; reason?: string } => {
     if (!profile) return { allowed: false, reason: 'Not authenticated' };
-
+  
     if (targetUser.id === profile.id) {
       return { allowed: false, reason: 'You cannot disable your own account' };
     }
-
-    if (targetUser.role === 'OWNER') {
-      return { allowed: false, reason: 'Cannot disable OWNER accounts' };
+  
+    if (targetUser.is_creator) {
+      return { allowed: false, reason: 'Creator cannot be disabled' };
     }
-
+  
+    if (targetUser.is_super_admin) {
+      return { allowed: false, reason: 'SUPER_ADMIN cannot be disabled' };
+    }
+  
+    if (isSuperAdmin) {
+      return { allowed: true };
+    }
+  
+    if (targetUser.role === 'OWNER') {
+      return { allowed: false, reason: 'Only SUPER_ADMIN can disable OWNER accounts' };
+    }
+  
     return { allowed: true };
   };
 
   const isLastOwner = (targetUser: UserProfile): boolean => {
     if (targetUser.role !== 'OWNER') return false;
-    const activeOwners = users.filter(u => u.role === 'OWNER' && !u.disabled);
+    const activeOwners = users.filter((u) => u.role === 'OWNER' && !u.disabled);
     return activeOwners.length === 1;
   };
 
-  const getAvailableRoles = (targetUser: UserProfile): UserRole[] => {
+  const getAvailableRoles = (): UserRole[] => {
     if (!profile) return NON_ADMIN_ROLES;
-
-    if (profile.role === 'OWNER') {
-      if (isLastOwner(targetUser)) {
-        return ROLE_OPTIONS;
-      }
-      return ROLE_OPTIONS;
-    }
-
+    if (isSuperAdmin) return ROLE_OPTIONS;
+    if (profile.role === 'OWNER') return ROLE_OPTIONS;
     return NON_ADMIN_ROLES;
   };
 
-  const getRoleChangeWarning = (targetUser: UserProfile, newRole: UserRole): string | null => {
-    if (targetUser.role === 'OWNER' && newRole !== 'OWNER') {
-      if (isLastOwner(targetUser)) {
-        return 'Cannot demote the last OWNER';
-      }
+  const getRoleChangeWarning = (targetUser: UserProfile, newRole: RoleSelect): string | null => {
+    if (newRole === 'SUPER_ADMIN') {
+      return 'Granting SUPER_ADMIN gives full access to all organizations';
+    }
+
+    const role = newRole as UserRole;
+
+    if (targetUser.role === 'OWNER' && role !== 'OWNER') {
+      if (isLastOwner(targetUser)) return 'Cannot demote the last OWNER';
       return 'Demoting an OWNER will remove their full system access';
     }
 
-    if (targetUser.role === 'ADMIN' && !ADMIN_ROLES.includes(newRole)) {
+    if (targetUser.role === 'ADMIN' && !ADMIN_ROLES.includes(role)) {
       return 'Demoting an ADMIN will reduce their permissions';
     }
 
@@ -105,10 +190,20 @@ export default function AdminUsersPage() {
   };
 
   useEffect(() => {
-    if (profile && (profile.role === 'OWNER' || profile.role === 'ADMIN')) {
+    console.log("ADMIN USERS useEffect fired", {
+      profile,
+      isSuperAdmin,
+    });
+  
+    if (!profile) return;
+  
+    if (profile.is_super_admin || profile.role === 'OWNER' || profile.role === 'ADMIN') {
       cleanupExpiredInvites();
+      console.log("fetchUsers START");
       fetchUsers();
+      fetchOrganizations();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile]);
 
   const cleanupExpiredInvites = async () => {
@@ -117,19 +212,17 @@ export default function AdminUsersPage() {
     const now = Date.now();
     const oneDayMs = 24 * 60 * 60 * 1000;
 
-    if (lastCleanup && now - parseInt(lastCleanup) < oneDayMs) {
-      return;
-    }
+    if (lastCleanup && now - parseInt(lastCleanup) < oneDayMs) return;
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
       if (!session) return;
 
       await fetch('/api/admin/cleanup-invites', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`
-        }
+        headers: { Authorization: `Bearer ${session.access_token}` },
       });
 
       localStorage.setItem(CLEANUP_KEY, now.toString());
@@ -138,27 +231,78 @@ export default function AdminUsersPage() {
     }
   };
 
+  
   const fetchUsers = async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('user_profiles')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setUsers(data || []);
+  
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+  
+      if (!session?.access_token) {
+        toast.error("Not authenticated");
+        return;
+      }
+  
+      const res = await fetch("/api/admin/users", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
+  
+      const json = await res.json();
+  
+      if (!res.ok) {
+        throw new Error(json?.message || json?.error || "Failed to load users");
+      }
+  
+      setUsers((json.users ?? []) as UserRow[]);
+      console.log("FETCH USERS count:", (json.users || []).length, json.users);
     } catch (error) {
-      console.error('Error fetching users:', error);
-      toast.error('Failed to load users');
+      console.error("Error fetching users:", error);
+      toast.error("Failed to load users");
     } finally {
       setLoading(false);
     }
   };
+  
+  const fetchOrganizations = async () => {
+    console.log("fetchOrganizations START");
+  
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+  
+      if (!session?.access_token) {
+        toast.error("Not authenticated");
+        return;
+      }
+  
+      const res = await fetch("/api/admin/organizations/list", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
+  
+      const data = await res.json().catch(() => null);
 
-  const handleRoleChange = (user: UserProfile, newRole: UserRole) => {
+      if (!res.ok) {
+        console.error("Error fetching organizations:", data);
+        return;
+      }
+      
+      setOrganizations(data?.organizations ?? []);
+    } catch (error) {
+      console.error("Error fetching organizations:", error);
+    }
+  };
+
+  const handleRoleChange = (user: UserProfile, newRole: RoleSelect) => {
     const canModify = canModifyUser(user, newRole);
-
     if (!canModify.allowed) {
       toast.error(canModify.reason || 'Cannot modify this user');
       return;
@@ -170,64 +314,128 @@ export default function AdminUsersPage() {
       return;
     }
 
-    setPendingChanges(prev => ({
-      ...prev,
-      [user.id]: newRole
-    }));
+    setPendingChanges((prev) => ({ ...prev, [user.id]: newRole }));
   };
 
   const handleSaveRole = async (userId: string) => {
-    const newRole = pendingChanges[userId];
-    if (!newRole) return;
-
-    const user = users.find(u => u.id === userId);
+    const selection = pendingChanges[userId];
+    if (!selection) return;
+  
+    const user = users.find((u) => u.id === userId);
     if (!user) return;
-
-    const canModify = canModifyUser(user, newRole);
+  
+    const canModify = canModifyUser(user, selection);
     if (!canModify.allowed) {
       toast.error(canModify.reason || 'Cannot modify this user');
       return;
     }
-
-    if (isLastOwner(user) && newRole !== 'OWNER') {
+  
+    if (user.is_creator) {
+      toast.error('Creator account cannot be modified');
+      return;
+    }
+  
+    if (selection !== 'SUPER_ADMIN' && isLastOwner(user) && selection !== 'OWNER') {
       toast.error('Cannot demote the last OWNER. At least one OWNER must remain.');
       return;
     }
-
+  
+    const oldRole: RoleSelect = user.is_super_admin ? 'SUPER_ADMIN' : user.role;
+  
     try {
       setSavingUserId(userId);
+  
+      const updatePayload: { role?: UserRole; is_super_admin?: boolean } = {};
+  
+      if (selection === 'SUPER_ADMIN') {
+        updatePayload.is_super_admin = true;
+      } else {
+        updatePayload.role = selection as UserRole;
+        updatePayload.is_super_admin = false;
+      }
+  
       const { error } = await supabase
         .from('user_profiles')
-        .update({ role: newRole })
+        .update(updatePayload)
         .eq('id', userId);
-
+  
       if (error) {
-        throw error;
+        toast.error(`UPDATE ROLE failed: ${error.message}`);
+        return;
       }
-
-      setUsers(prev => prev.map(u =>
-        u.id === userId ? { ...u, role: newRole } : u
-      ));
-
-      setPendingChanges(prev => {
+  
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      
+      const { data: actorProfile } = await supabase
+        .from('user_profiles')
+        .select('first_name,last_name,email')
+        .eq('id', session?.user?.id)
+        .single();
+      
+      if (session?.user?.id) {
+        const payload = {
+          action: 'role_change',
+          actor_id: session.user.id,
+          target_id: userId,
+          organization_id: user.organization_id ?? null,
+          details: {
+            message: `Role changed: ${oldRole} → ${selection}`,
+            actor_name: `${actorProfile?.first_name ?? ''} ${actorProfile?.last_name ?? ''}`.trim() || null,
+            actor_email: actorProfile?.email || session.user.email || null,
+            target_name: `${user.first_name ?? ''} ${user.last_name ?? ''}`.trim() || null,
+            target_email: user.email,
+            organization_name: user.organizations?.name || null,
+          },
+        };
+  
+        const { error: auditError } = await supabase
+          .from('audit_logs')
+          .insert(payload);
+  
+        if (auditError) {
+          console.error('Audit log insert failed:', auditError);
+        }
+      }
+  
+      setUsers((prev) =>
+        prev.map((u) => {
+          if (u.id !== userId) return u;
+  
+          if (selection === 'SUPER_ADMIN') {
+            return { ...u, is_super_admin: true };
+          }
+  
+          return {
+            ...u,
+            role: selection as UserRole,
+            is_super_admin: false,
+          };
+        })
+      );
+  
+      setPendingChanges((prev) => {
         const updated = { ...prev };
         delete updated[userId];
         return updated;
       });
-
+  
       toast.success('Role updated successfully');
-    } catch (error: any) {
-      console.error('Error updating role:', error);
-      toast.error(error.message || 'Failed to update role');
+  
+      await fetchUsers();
+    } catch (err: any) {
+      console.error('Error updating role:', err);
+      toast.error(err?.message || 'Failed to update role');
     } finally {
       setSavingUserId(null);
     }
   };
 
   const handleToggleDisabled = async (userId: string, currentDisabled: boolean) => {
-    const user = users.find(u => u.id === userId);
+    const user = users.find((u) => u.id === userId);
     if (!user) return;
-
+  
     if (!currentDisabled) {
       const canDisable = canDisableUser(user);
       if (!canDisable.allowed) {
@@ -235,80 +443,386 @@ export default function AdminUsersPage() {
         return;
       }
     }
-
+  
     try {
       setTogglingUserId(userId);
-      const { error } = await supabase
-        .from('user_profiles')
-        .update({ disabled: !currentDisabled })
-        .eq('id', userId);
-
-      if (error) {
-        throw error;
+  
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+  
+      if (!accessToken) {
+        toast.error('Not authenticated');
+        return;
       }
-
-      setUsers(prev => prev.map(u =>
-        u.id === userId ? { ...u, disabled: !currentDisabled } : u
-      ));
-
-      toast.success(`User ${!currentDisabled ? 'disabled' : 'enabled'} successfully`);
-    } catch (error: any) {
-      console.error('Error toggling user status:', error);
-      toast.error(error.message || 'Failed to update user status');
+  
+      const res = await fetch('/api/admin/users/toggle-disabled', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          userId,
+          disabled: !currentDisabled,
+        }),
+      });
+  
+      const json = await res.json().catch(() => null);
+  
+      if (!res.ok) {
+        console.error('TOGGLE DISABLED failed:', { status: res.status, json });
+        toast.error(json?.error || `Failed (${res.status})`);
+        return;
+      }
+  
+      const updatedProfile = json?.profile;
+  
+      if (updatedProfile) {
+        setUsers((prev) =>
+          prev.map((u) => (u.id === userId ? { ...u, ...(updatedProfile as any) } : u))
+        );
+      } else {
+        setUsers((prev) =>
+          prev.map((u) => (u.id === userId ? { ...u, disabled: !currentDisabled } : u))
+        );
+      }
+  
+      toast.success(!currentDisabled ? 'User disabled' : 'User enabled');
+  
+      const { data: sessionData2 } = await supabase.auth.getSession();
+      const actorId = sessionData2?.session?.user?.id;
+  
+      const { data: actorProfile } = await supabase
+        .from('user_profiles')
+        .select('first_name,last_name,email')
+        .eq('id', actorId)
+        .single();
+  
+      if (actorId) {
+        const actionName = !currentDisabled ? 'user_disable' : 'user_enable';
+  
+        const { error: auditError } = await supabase.from('audit_logs').insert({
+          action: actionName,
+          actor_id: actorId,
+          target_id: userId,
+          organization_id: user.organization_id ?? null,
+          details: {
+            message: !currentDisabled ? 'Account disabled' : 'Account enabled',
+            actor_name: `${actorProfile?.first_name ?? ''} ${actorProfile?.last_name ?? ''}`.trim() || null,
+            actor_email: actorProfile?.email || sessionData2?.session?.user?.email || null,
+            target_name: `${user.first_name ?? ''} ${user.last_name ?? ''}`.trim() || null,
+            target_email: user.email,
+            organization_name: user.organizations?.name || null,
+          },
+        });
+  
+        if (auditError) {
+          console.error('Audit log insert failed:', auditError);
+        }
+      }
+    } catch (err: any) {
+      console.error('Error toggling user:', err);
+      toast.error(err?.message || 'Failed to update user');
     } finally {
       setTogglingUserId(null);
     }
   };
-
-  const handleSendInvite = async () => {
-    if (!inviteEmail || !inviteRole) {
-      toast.error('Email and role are required');
+  
+  const handleDeleteUser = async (user: UserRow) => {
+    const confirmed = window.confirm(
+      `Delete user ${user.email}? This action cannot be undone.`
+    );
+  
+    if (!confirmed) return;
+  
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+  
+      if (!accessToken) {
+        toast.error('Not authenticated');
+        return;
+      }
+  
+      const res = await fetch('/api/admin/users/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          userId: user.id,
+        }),
+      });
+  
+      const json = await res.json().catch(() => null);
+  
+      if (!res.ok) {
+        toast.error(json?.error || `Delete failed (${res.status})`);
+        return;
+      }
+  
+      setUsers((prev) => prev.filter((u) => u.id !== user.id));
+      toast.success('User deleted');
+    } catch (err: any) {
+      console.error('Delete user error:', err);
+      toast.error(err?.message || 'Failed to delete user');
+    }
+  };
+  
+  const handleCreateOrganization = async () => {
+    const name = organizationName.trim();
+    setOrganizationError('');
+    
+  
+    if (!name) {
+      toast.error('Organization name is required');
       return;
     }
+  
+    try {
+      setCreatingOrganization(true);
+  
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+  
+      if (!session?.access_token) {
+        toast.error('Not authenticated');
+        return;
+      }
+  
+      const res = await fetch('/api/admin/organizations/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ name }),
+      });
+  
+      const json = await res.json().catch(() => null);
+  
+      if (!res.ok) {
+        toast.error(json?.error || `Create failed (${res.status})`);
+        return;
+      }
+  
+      toast.success('Organization created');
+      setOrganizationModalOpen(false);
+      setOrganizationName('');
+      await fetchOrganizations();
+    } catch (err: any) {
+      console.error('Create organization error:', err);
+      toast.error(err?.message || 'Failed to create organization');
+    } finally {
+      setCreatingOrganization(false);
+    }
+  };
+  
+  const handleDeleteOrganization = async (organizationId: string, organizationName: string) => {
+    const confirmed = window.confirm(
+      `Delete organization "${organizationName}"? This action cannot be undone.`
+    );
+  
+    if (!confirmed) return;
+    setOrganizationError('');
+  
+    try {
+      setDeletingOrganizationId(organizationId);
+  
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+  
+      if (!session?.access_token) {
+        toast.error('Not authenticated');
+        return;
+      }
+  
+      const res = await fetch('/api/admin/organizations/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ organizationId }),
+      });
+  
+      const data = await res.json().catch(() => null);
 
+      if (!res.ok) {
+        console.error('DELETE ORGANIZATION ERROR:', { status: res.status, data });
+        setOrganizationError(data?.error || data?.message || `Delete failed (${res.status})`);
+        return;
+      }
+  
+      toast.success('Organization deleted', {
+        duration: 3000,
+      });
+  
+      await fetchOrganizations();
+    } catch (err: any) {
+      console.error('Delete organization error:', err);
+      toast.error(err?.message || 'Failed to delete organization', {
+        duration: 4000,
+      });
+    } finally {
+      setDeletingOrganizationId(null);
+    }
+  };
+  
+  const handleSendInvite = async () => {
+    if (!inviteEmail || !inviteRole || !inviteOrganizationId) {
+      toast.error('Email, role and organization are required');
+      return;
+    }
+  
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(inviteEmail)) {
       toast.error('Please enter a valid email address');
       return;
     }
-
+  
     try {
       setSendingInvite(true);
-
-      const { data: { session } } = await supabase.auth.getSession();
+  
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      
       if (!session) {
         toast.error('Not authenticated');
         return;
       }
-
+  
       const response = await fetch('/api/admin/invite', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.access_token}`
+          Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
           email: inviteEmail,
-          role: inviteRole
-        })
+          role: inviteRole,
+          organizationId: inviteOrganizationId,
+        }),
       });
-
+  
       const data = await response.json();
-
+  
       if (!response.ok) {
         throw new Error(data.error || 'Failed to send invite');
       }
-
+  
       toast.success('Invite sent successfully');
       setInviteModalOpen(false);
       setInviteEmail('');
       setInviteRole('MANAGER');
+      setInviteOrganizationId('');
       fetchUsers();
     } catch (error: any) {
       console.error('Error sending invite:', error);
       toast.error(error.message || 'Failed to send invite');
     } finally {
       setSendingInvite(false);
+    }
+  };
+  
+  const resetCreateForm = () => {
+    setCreateOrganizationId('');
+    setCreateFirstName('');
+    setCreateLastName('');
+    setCreateEmail('');
+    setCreateRole('MANAGER');
+    setCreatePassword('');
+    setCreateConfirmPassword('');
+    setCreateShowPasswords(false);
+  };
+  
+  const handleCreateUserClick = async () => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  
+    const organizationId = createOrganizationId.trim();
+    const firstName = createFirstName.trim();
+    const lastName = createLastName.trim();
+    const email = createEmail.trim().toLowerCase();
+  
+    if (!organizationId) {
+      toast.error('Organization is required');
+      return;
+    }
+  
+    if (!firstName) {
+      toast.error('Name is required');
+      return;
+    }
+  
+    if (!lastName) {
+      toast.error('Surname is required');
+      return;
+    }
+  
+    if (!emailRegex.test(email)) {
+      toast.error('Valid email is required');
+      return;
+    }
+  
+    if (!createPwOk) {
+      toast.error('Password does not meet requirements');
+      return;
+    }
+  
+    if (createPassword !== createConfirmPassword) {
+      toast.error('Passwords do not match');
+      return;
+    }
+  
+    try {
+      setCreating(true);
+  
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+  
+      if (!accessToken) {
+        toast.error('No access token, please login again');
+        return;
+      }
+  
+      const res = await fetch('/api/admin/users/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          organizationId,
+          firstName,
+          lastName,
+          email,
+          role: createRole,
+          password: createPassword,
+        }),
+      });
+  
+      const data = await res.json().catch(() => null);
+  
+      if (!res.ok) {
+        console.error('CREATE USER ERROR:', { status: res.status, data });
+        toast.error(data?.error || data?.message || `Create failed (${res.status})`);
+        return;
+      }
+  
+      toast.success('User created');
+  
+      setCreateOpen(false);
+      resetCreateForm();
+      await fetchUsers();
+    } catch (err) {
+      console.error('CREATE USER EXCEPTION:', err);
+      toast.error('Network error (see Console)');
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -327,89 +841,302 @@ export default function AdminUsersPage() {
     <div className="p-6 max-w-7xl mx-auto">
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-slate-900">User Management</h1>
-        <p className="text-slate-600 mt-2">
-          Manage user accounts and permissions
-        </p>
+        <p className="text-slate-600 mt-2">Manage user accounts and permissions</p>
       </div>
-
+  
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3">
             <div>
               <CardTitle>All Users</CardTitle>
-              <CardDescription>
-                View and manage user roles across the organization
-              </CardDescription>
+              <CardDescription>View and manage user roles across the organization</CardDescription>
             </div>
-            <Dialog open={inviteModalOpen} onOpenChange={setInviteModalOpen}>
-              <DialogTrigger asChild>
-                <Button>
-                  <UserPlus className="h-4 w-4 mr-2" />
-                  Invite User
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Invite New User</DialogTitle>
-                  <DialogDescription>
-                    Send an invitation email to add a new user to your organization.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4 py-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="invite-email">Email</Label>
-                    <Input
-                      id="invite-email"
-                      type="email"
-                      placeholder="user@example.com"
-                      value={inviteEmail}
-                      onChange={(e) => setInviteEmail(e.target.value)}
-                      disabled={sendingInvite}
-                    />
+  
+            <div className="flex items-center gap-2">
+              {/* CREATE USER */}
+              <Dialog
+                open={createOpen}
+                onOpenChange={(v) => {
+                  setCreateOpen(v);
+                  if (!v) resetCreateForm();
+                }}
+              >
+                <DialogTrigger asChild>
+                  <Button variant="outline">
+                    <UserCog className="h-4 w-4 mr-2" />
+                    Add User
+                  </Button>
+                </DialogTrigger>
+  
+                <DialogContent className="max-w-2xl">
+                  <DialogHeader>
+                    <DialogTitle>Add New User</DialogTitle>
+                    <DialogDescription>Create user for testing (admin sets password).</DialogDescription>
+                  </DialogHeader>
+  
+                  <div className="border rounded-md overflow-hidden">
+                    <div className="grid grid-cols-3">
+                      <div className="border-b border-r px-4 py-3 text-sm font-medium text-center">Name</div>
+                      <div className="border-b px-4 py-3 col-span-2">
+                        <Input
+                          placeholder="e.g. Artur"
+                          value={createFirstName}
+                          onChange={(e) => setCreateFirstName(e.target.value)}
+                        />
+                      </div>
+                    </div>
+  
+                    <div className="grid grid-cols-3">
+                      <div className="border-b border-r px-4 py-3 text-sm font-medium text-center">Surname</div>
+                      <div className="border-b px-4 py-3 col-span-2">
+                        <Input
+                          placeholder="e.g. Dobrodej"
+                          value={createLastName}
+                          onChange={(e) => setCreateLastName(e.target.value)}
+                        />
+                      </div>
+                    </div>
+  
+                    <div className="grid grid-cols-3">
+                      <div className="border-b border-r px-4 py-3 text-sm font-medium text-center">
+                        Organization
+                      </div>
+  
+                      <div className="border-b px-4 py-3 col-span-2">
+                        <Select
+                          value={createOrganizationId}
+                          onValueChange={(value) => setCreateOrganizationId(value)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select organization" />
+                          </SelectTrigger>
+  
+                          <SelectContent>
+                            {organizations.map((org) => (
+                              <SelectItem key={org.id} value={org.id}>
+                                {org.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+  
+                    <div className="grid grid-cols-3">
+                      <div className="border-b border-r px-4 py-3 text-sm font-medium text-center">Email</div>
+                      <div className="border-b px-4 py-3 col-span-2">
+                        <Input
+                          type="email"
+                          placeholder="user@example.com"
+                          value={createEmail}
+                          onChange={(e) => setCreateEmail(e.target.value)}
+                        />
+                      </div>
+                    </div>
+  
+                    <div className="grid grid-cols-3">
+                      <div className="border-b border-r px-4 py-3 text-sm font-medium text-center">Role</div>
+                      <div className="border-b px-4 py-3 col-span-2">
+                        <Select value={createRole} onValueChange={(v) => setCreateRole(v as UserRole)}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select role" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {(profile.role === 'OWNER' || isSuperAdmin ? ROLE_OPTIONS : NON_ADMIN_ROLES).map((r) => (
+                              <SelectItem key={r} value={r}>
+                                {r}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+  
+                    <div className="grid grid-cols-3">
+                      <div className="border-r px-4 py-3 text-sm font-medium text-center">Password</div>
+                      <div className="px-4 py-3 col-span-2">
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type={createShowPasswords ? 'text' : 'password'}
+                            placeholder="Min 10, upper/lower/number/symbol"
+                            value={createPassword}
+                            onChange={(e) => setCreatePassword(e.target.value)}
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            onClick={() => setCreateShowPasswords((v) => !v)}
+                            aria-label={createShowPasswords ? 'Hide password' : 'Show password'}
+                          >
+                            {createShowPasswords ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          </Button>
+                        </div>
+  
+                        <div className="mt-2 grid grid-cols-2 gap-x-4 text-xs">
+                          <div className={createPwRules.min10 ? 'font-medium' : 'text-muted-foreground'}>• Min 10 symbols</div>
+                          <div className={createPwRules.lower ? 'font-medium' : 'text-muted-foreground'}>• Lowercase</div>
+                          <div className={createPwRules.upper ? 'font-medium' : 'text-muted-foreground'}>• Uppercase</div>
+                          <div className={createPwRules.number ? 'font-medium' : 'text-muted-foreground'}>• Number</div>
+                          <div className={createPwRules.symbol ? 'font-medium' : 'text-muted-foreground'}>• Symbol</div>
+                        </div>
+  
+                        <div className="mt-3">
+                          <div className="text-sm font-medium mb-1">Confirm password</div>
+                          <Input
+                            type={createShowPasswords ? 'text' : 'password'}
+                            placeholder="Repeat password"
+                            value={createConfirmPassword}
+                            onChange={(e) => setCreateConfirmPassword(e.target.value)}
+                          />
+                          <div className="mt-1 text-xs">
+                            {createConfirmPassword.length === 0 ? (
+                              <span className="text-muted-foreground">Re-enter the same password</span>
+                            ) : createPwMatch ? (
+                              <span className="font-medium">Passwords match</span>
+                            ) : (
+                              <span className="text-destructive">Passwords do not match</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="invite-role">Role</Label>
-                    <Select
-                      value={inviteRole}
-                      onValueChange={(value) => setInviteRole(value as UserRole)}
+  
+                  <DialogFooter>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setCreateOpen(false);
+                        resetCreateForm();
+                      }}
+                      disabled={creating}
+                    >
+                      Cancel
+                    </Button>
+  
+                    <Button
+                      onClick={handleCreateUserClick}
+                      disabled={
+                        creating ||
+                        !createOrganizationId ||
+                        !createFirstName.trim() ||
+                        !createLastName.trim() ||
+                        !createEmail.trim() ||
+                        !createPwOk ||
+                        createPassword !== createConfirmPassword
+                      }
+                    >
+                      {creating ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Creating...
+                        </>
+                      ) : (
+                        'Create'
+                      )}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+  
+              {/* INVITE USER */}
+              <Dialog open={inviteModalOpen} onOpenChange={setInviteModalOpen}>
+                <DialogTrigger asChild>
+                  <Button>
+                    <UserPlus className="h-4 w-4 mr-2" />
+                    Invite User
+                  </Button>
+                </DialogTrigger>
+  
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Invite New User</DialogTitle>
+                    <DialogDescription>
+                      Send an invitation email to add a new user to your organization.
+                    </DialogDescription>
+                  </DialogHeader>
+  
+                  <div className="space-y-4 py-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="invite-email">Email</Label>
+                      <Input
+                        id="invite-email"
+                        type="email"
+                        placeholder="user@example.com"
+                        value={inviteEmail}
+                        onChange={(e) => setInviteEmail(e.target.value)}
+                        disabled={sendingInvite}
+                      />
+                    </div>
+  
+                    <div className="space-y-2">
+                      <Label htmlFor="invite-role">Role</Label>
+                      <Select
+                        value={inviteRole}
+                        onValueChange={(value) => setInviteRole(value as UserRole)}
+                        disabled={sendingInvite}
+                      >
+                        <SelectTrigger id="invite-role">
+                          <SelectValue placeholder="Select role" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(profile.role === 'OWNER' || isSuperAdmin ? ROLE_OPTIONS : NON_ADMIN_ROLES).map((role) => (
+                            <SelectItem key={role} value={role}>
+                              {role}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+  
+                    <div className="space-y-2">
+                      <Label htmlFor="invite-organization">Organization</Label>
+                      <Select
+                        value={inviteOrganizationId}
+                        onValueChange={setInviteOrganizationId}
+                        disabled={sendingInvite}
+                      >
+                        <SelectTrigger id="invite-organization">
+                          <SelectValue placeholder="Select organization" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {organizations.map((org) => (
+                            <SelectItem key={org.id} value={org.id}>
+                              {org.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+  
+                  <DialogFooter>
+                    <Button
+                      variant="outline"
+                      onClick={() => setInviteModalOpen(false)}
                       disabled={sendingInvite}
                     >
-                      <SelectTrigger id="invite-role">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {(profile?.role === 'OWNER' ? ROLE_OPTIONS : NON_ADMIN_ROLES).map((role) => (
-                          <SelectItem key={role} value={role}>
-                            {role}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button
-                    variant="outline"
-                    onClick={() => setInviteModalOpen(false)}
-                    disabled={sendingInvite}
-                  >
-                    Cancel
-                  </Button>
-                  <Button onClick={handleSendInvite} disabled={sendingInvite}>
-                    {sendingInvite ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Sending...
-                      </>
-                    ) : (
-                      'Send Invite'
-                    )}
-                  </Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
+                      Cancel
+                    </Button>
+  
+                    <Button onClick={handleSendInvite} disabled={sendingInvite}>
+                      {sendingInvite ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Sending...
+                        </>
+                      ) : (
+                        'Send Invite'
+                      )}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </div>
           </div>
         </CardHeader>
+
         <CardContent>
           {loading ? (
             <div className="flex items-center justify-center py-12">
@@ -427,78 +1154,102 @@ export default function AdminUsersPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Email</TableHead>
+                    <TableHead>Organization</TableHead>
                     <TableHead>Role</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Joined</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
+
                 <TableBody>
                   {users.map((user) => {
                     const hasPendingChange = pendingChanges[user.id] !== undefined;
                     const isSaving = savingUserId === user.id;
                     const isToggling = togglingUserId === user.id;
-                    const displayRole = pendingChanges[user.id] || user.role;
+
+                    const displayRole: RoleSelect =
+                      (pendingChanges[user.id] as RoleSelect) || (user.is_super_admin ? 'SUPER_ADMIN' : user.role);
+
                     const isCurrentUser = user.id === profile?.id;
-                    const canModify = canModifyUser(user);
+
+                    const canModify = canModifyUser(user, displayRole);
                     const canDisable = canDisableUser(user);
-                    const availableRoles = getAvailableRoles(user);
-                    const isOwnerUser = user.role === 'OWNER';
+                    const availableRoles = getAvailableRoles();
                     const lastOwner = isLastOwner(user);
 
                     return (
                       <TableRow key={user.id} className={user.disabled ? 'opacity-60' : ''}>
+                        {/* EMAIL */}
                         <TableCell className="font-medium">
-                          <div className="flex items-center gap-2">
-                            {user.email}
-                            {isCurrentUser && (
-                              <Badge variant="outline" className="text-xs">You</Badge>
-                            )}
-                            {lastOwner && (
-                              <TooltipProvider>
-                                <Tooltip>
-                                  <TooltipTrigger>
-                                    <AlertCircle className="h-4 w-4 text-amber-500" />
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p>Last OWNER - cannot be demoted or disabled</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </TooltipProvider>
-                            )}
-                          </div>
-                        </TableCell>
+  <div className="flex items-start justify-between gap-2">
+    <div>
+      <div className="font-medium text-slate-900">
+        {[user.first_name, user.last_name].filter(Boolean).join(' ') || '—'}
+      </div>
+      <div className="text-sm text-slate-500">
+        {user.email}
+      </div>
+    </div>
+
+    <div className="flex items-center gap-2">
+      {isCurrentUser && <Badge variant="outline" className="text-xs">You</Badge>}
+
+      {lastOwner && (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger>
+              <AlertCircle className="h-4 w-4 text-amber-500" />
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Last OWNER - cannot be demoted or disabled</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      )}
+    </div>
+  </div>
+</TableCell>
+
+                        {/* ORGANIZATION */}
+                        <TableCell>{(user as any).organizations?.name || '—'}</TableCell>
+
+                        {/* ROLE */}
                         <TableCell>
                           <TooltipProvider>
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <div>
                                   <Select
-                                    value={displayRole}
-                                    onValueChange={(value) => handleRoleChange(user, value as UserRole)}
-                                    disabled={isSaving || user.disabled || !canModify.allowed || isCurrentUser}
-                                  >
+                                  value={displayRole}
+                                  onValueChange={(value) => handleRoleChange(user, value as RoleSelect)}
+                                  disabled={isSaving || user.disabled || !canModify.allowed || isCurrentUser || user.is_creator}
+                                >
                                     <SelectTrigger className="w-[140px]">
                                       <SelectValue />
                                     </SelectTrigger>
+
                                     <SelectContent>
+                                      {isSuperAdmin && <SelectItem value="SUPER_ADMIN">SUPER_ADMIN</SelectItem>}
+
                                       {availableRoles.map((role) => {
-                                        const isDisabled = lastOwner && role !== 'OWNER';
-                                        return (
-                                          <SelectItem
-                                            key={role}
-                                            value={role}
-                                            disabled={isDisabled}
-                                          >
-                                            {role}
-                                            {isDisabled && ' (Last OWNER)'}
-                                          </SelectItem>
-                                        );
-                                      })}
+  const isLastProtectedOwner =
+    lastOwner &&
+    !user.is_super_admin &&
+    role !== 'OWNER';
+
+  return (
+    <SelectItem key={role} value={role} disabled={isLastProtectedOwner}>
+      {role}
+      {isLastProtectedOwner && ' (Last OWNER)'}
+    </SelectItem>
+  );
+})}
                                     </SelectContent>
                                   </Select>
                                 </div>
                               </TooltipTrigger>
+
                               {!canModify.allowed && (
                                 <TooltipContent>
                                   <p>{canModify.reason}</p>
@@ -507,22 +1258,34 @@ export default function AdminUsersPage() {
                             </Tooltip>
                           </TooltipProvider>
                         </TableCell>
+
+                        {/* STATUS */}
                         <TableCell>
-                          <Badge variant={user.disabled ? 'destructive' : 'default'}>
-                            {user.disabled ? 'Disabled' : 'Active'}
-                          </Badge>
-                        </TableCell>
+  <Badge
+    variant={
+      user.is_pending
+        ? 'secondary'
+        : user.disabled
+        ? 'destructive'
+        : 'default'
+    }
+  >
+    {user.is_pending ? 'Pending confirmation' : user.disabled ? 'Disabled' : 'Active'}
+  </Badge>
+</TableCell>
+
+                        {/* JOINED */}
                         <TableCell>
-                          {format(new Date(user.created_at), 'MMM d, yyyy')}
-                        </TableCell>
+  {user.is_pending
+    ? 'Invitation sent'
+    : format(new Date(user.created_at), 'MMM d, yyyy')}
+</TableCell>
+
+                        {/* ACTIONS */}
                         <TableCell className="text-right">
                           <div className="flex items-center justify-end gap-2">
                             {hasPendingChange && (
-                              <Button
-                                size="sm"
-                                onClick={() => handleSaveRole(user.id)}
-                                disabled={isSaving || isToggling}
-                              >
+                              <Button size="sm" onClick={() => handleSaveRole(user.id)} disabled={isSaving || isToggling}>
                                 {isSaving ? (
                                   <>
                                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -536,67 +1299,82 @@ export default function AdminUsersPage() {
                                 )}
                               </Button>
                             )}
-                            <TooltipProvider>
-                              <Tooltip>
-                                <AlertDialog>
-                                  <TooltipTrigger asChild>
-                                    <div>
-                                      <AlertDialogTrigger asChild>
-                                        <Button
-                                          size="sm"
-                                          variant={user.disabled ? 'default' : 'destructive'}
-                                          disabled={isToggling || isSaving || (!user.disabled && !canDisable.allowed)}
-                                        >
-                                          {isToggling ? (
-                                            <>
-                                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                              Processing...
-                                            </>
-                                          ) : user.disabled ? (
-                                            <>
-                                              <CheckCircle className="h-4 w-4 mr-2" />
-                                              Enable
-                                            </>
-                                          ) : (
-                                            <>
-                                              <Ban className="h-4 w-4 mr-2" />
-                                              Disable
-                                            </>
-                                          )}
-                                        </Button>
-                                      </AlertDialogTrigger>
-                                    </div>
-                                  </TooltipTrigger>
-                                  {!user.disabled && !canDisable.allowed && (
-                                    <TooltipContent>
-                                      <p>{canDisable.reason}</p>
-                                    </TooltipContent>
-                                  )}
-                                  <AlertDialogContent>
-                                    <AlertDialogHeader>
-                                      <AlertDialogTitle>
-                                        {user.disabled ? 'Enable User' : 'Disable User'}
-                                      </AlertDialogTitle>
-                                      <AlertDialogDescription>
-                                        {user.disabled
-                                          ? `Are you sure you want to enable ${user.email}? They will regain access to the application.`
-                                          : `Are you sure you want to disable ${user.email}? They will be immediately logged out and unable to access the application.`
-                                        }
-                                      </AlertDialogDescription>
-                                    </AlertDialogHeader>
-                                    <AlertDialogFooter>
-                                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                      <AlertDialogAction
-                                        onClick={() => handleToggleDisabled(user.id, user.disabled)}
-                                      >
-                                        {user.disabled ? 'Enable User' : 'Disable User'}
-                                      </AlertDialogAction>
-                                    </AlertDialogFooter>
-                                  </AlertDialogContent>
-                                </AlertDialog>
-                              </Tooltip>
-                            </TooltipProvider>
-                          </div>
+
+{!user.is_pending && (
+  <TooltipProvider>
+    <Tooltip>
+      <AlertDialog>
+        <TooltipTrigger asChild>
+          <div>
+            <AlertDialogTrigger asChild>
+              <Button
+                size="sm"
+                variant={user.disabled ? 'default' : 'destructive'}
+                disabled={
+                  isToggling ||
+                  isSaving ||
+                  (!user.disabled && !canDisable.allowed) ||
+                  isCurrentUser ||
+                  user.is_super_admin
+                }
+              >
+                {isToggling ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Processing...
+                  </>
+                ) : user.disabled ? (
+                  <>
+                    <CheckCircle className="h-4 w-4 mr-2" />
+                    Enable
+                  </>
+                ) : (
+                  <>
+                    <Ban className="h-4 w-4 mr-2" />
+                    Disable
+                  </>
+                )}
+              </Button>
+            </AlertDialogTrigger>
+          </div>
+        </TooltipTrigger>
+
+        {!user.disabled && !canDisable.allowed && (
+          <TooltipContent>
+            <p>{canDisable.reason}</p>
+          </TooltipContent>
+        )}
+
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{user.disabled ? 'Enable User' : 'Disable User'}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {user.disabled
+                ? `Are you sure you want to enable ${user.email}? They will regain access to the application.`
+                : `Are you sure you want to disable ${user.email}? They will be immediately logged out and unable to access the application.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => handleToggleDisabled(user.id, user.disabled)}>
+              {user.disabled ? 'Enable User' : 'Disable User'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </Tooltip>
+  </TooltipProvider>
+)}
+
+<Button
+  size="sm"
+  variant="destructive"
+  onClick={() => handleDeleteUser(user)}
+  disabled={isToggling || isSaving || isCurrentUser || user.is_super_admin || user.is_creator}
+>
+  Delete
+</Button>
+</div>
                         </TableCell>
                       </TableRow>
                     );

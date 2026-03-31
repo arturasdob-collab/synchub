@@ -1,47 +1,86 @@
-'use client';
+"use client";
 
-import { useEffect } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { supabase } from '@/lib/supabase/client';
+import { useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { createClient } from "@supabase/supabase-js";
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+function parseHash(hash: string) {
+  const h = hash.startsWith("#") ? hash.slice(1) : hash;
+  const params = new URLSearchParams(h);
+  return {
+    access_token: params.get("access_token"),
+    refresh_token: params.get("refresh_token"),
+    error: params.get("error"),
+    error_code: params.get("error_code"),
+    error_description: params.get("error_description"),
+    type: params.get("type"),
+  };
+}
 
 export default function AuthCallbackPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const search = useSearchParams();
 
   useEffect(() => {
-    const handleCallback = async () => {
-      const code = searchParams.get('code');
+    (async () => {
+      // kur po callback nukreipti (pvz. /set-password)
+      const next = search.get("next") || "/";
 
-      if (!code) {
-        router.push('/login');
+      // 1) jei supabase atsiuntė "code" query param (PKCE)
+      const code = search.get("code");
+      if (code) {
+        const { error } = await supabase.auth.exchangeCodeForSession(code);
+        if (error) {
+          router.replace(`/login?error=${encodeURIComponent(error.message)}`);
+          return;
+        }
+        router.replace(next);
         return;
       }
 
-      try {
-        const { error } = await supabase.auth.exchangeCodeForSession(code);
+      // 2) jei supabase atsiuntė tokenus HASH'e (implicit)
+      const { access_token, refresh_token, error, error_description } = parseHash(
+        window.location.hash || ""
+      );
 
-        if (error) {
-          console.error('Error exchanging code for session:', error);
-          router.push('/login');
+      if (error) {
+        router.replace(
+          `/login?error=${encodeURIComponent(error_description || error)}`
+        );
+        return;
+      }
+
+      if (access_token && refresh_token) {
+        const { error: setErr } = await supabase.auth.setSession({
+          access_token,
+          refresh_token,
+        });
+
+        if (setErr) {
+          router.replace(`/login?error=${encodeURIComponent(setErr.message)}`);
           return;
         }
 
-        router.push('/set-password');
-      } catch (error) {
-        console.error('Unexpected error:', error);
-        router.push('/login');
-      }
-    };
+        // nuvalom hash iš URL
+        window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
 
-    handleCallback();
-  }, [router, searchParams]);
+        router.replace(next);
+        return;
+      }
+
+      // jei nieko nėra – reiškia linkas neteisingas/pasibaigęs
+      router.replace(`/login?error=${encodeURIComponent("Missing code/token in callback URL")}`);
+    })();
+  }, [router, search]);
 
   return (
-    <div className="flex min-h-screen items-center justify-center">
-      <div className="text-center">
-        <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-current border-r-transparent align-[-0.125em] motion-reduce:animate-[spin_1.5s_linear_infinite]" />
-        <p className="mt-4 text-sm text-muted-foreground">Completing authentication...</p>
-      </div>
+    <div style={{ padding: 24 }}>
+      Processing authentication…
     </div>
   );
 }
