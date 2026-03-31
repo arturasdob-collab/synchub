@@ -1,5 +1,17 @@
 # SyncHub Project Context
 
+## Current active state
+
+- SyncHub uses Next.js App Router + Supabase + Vercel
+- Admin, Organizations, Audit Log, Companies, Contacts, Comments are working
+- Trips module is working
+- Trip HTML Order preview/edit is working
+- Manual order fields are stored in trip_order_drafts
+- Dynamic trip data is always loaded live from trip data
+- Draft cleanup is handled by Vercel cron
+- Current next priority is Orders module
+- Goal: design practical Orders DB structure and trip linking
+
 ## Full project context
 Tęsi darbą su mano projektu „SyncHub“ (Next.js App Router + Supabase). Žemiau yra pilna, sujungta projekto santrauka iš ankstesnių langų, kad neprarastum konteksto.
 
