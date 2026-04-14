@@ -5,7 +5,7 @@ import { createServerClient } from '@supabase/auth-helpers-nextjs';
 import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 
-export async function get(req: Request) {
+export async function GET(req: Request) {
     const authHeader = req.headers.get('authorization');
     const cronSecret = process.env.CRON_SECRET;
   
