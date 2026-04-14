@@ -2,6 +2,11 @@ import { NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/auth-helpers-nextjs';
 import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
+import {
+  replaceTripManagerShare,
+  validateShareableManager,
+} from '@/lib/server/manager-shares';
+import { validateCompanyTypeForOrganization } from '@/lib/server/company-type-validation';
 
 export async function POST(req: Request) {
   const cookieStore = cookies();
@@ -39,6 +44,7 @@ export async function POST(req: Request) {
     status,
     carrier_company_id,
     assigned_manager_id,
+    groupage_responsible_manager_id,
     truck_plate,
     trailer_plate,
     driver_name,
@@ -50,7 +56,7 @@ export async function POST(req: Request) {
     is_groupage,
   } = body;
 
-  const allowedStatuses = ['unconfirmed', 'confirmed', 'completed'];
+  const allowedStatuses = ['unconfirmed', 'confirmed', 'active', 'completed'];
 
   if (!status || !allowedStatuses.includes(status)) {
     return NextResponse.json({ error: 'Invalid status' }, { status: 400 });
@@ -69,6 +75,55 @@ export async function POST(req: Request) {
     );
   }
 
+  let sharedManager = null;
+  let groupageManager = null;
+
+  try {
+    sharedManager = await validateShareableManager(
+      serviceSupabase,
+      profile.organization_id,
+      body.shared_manager_user_id,
+      body.shared_organization_id
+    );
+
+    groupageManager = await validateShareableManager(
+      serviceSupabase,
+      profile.organization_id,
+      groupage_responsible_manager_id,
+      body.groupage_shared_organization_id ?? body.shared_organization_id
+    );
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Invalid manager selection' },
+      { status: 400 }
+    );
+  }
+
+  if (is_groupage && !groupageManager) {
+    return NextResponse.json(
+      { error: 'Groupage manager is required for groupage trip' },
+      { status: 400 }
+    );
+  }
+
+  try {
+    await validateCompanyTypeForOrganization(
+      serviceSupabase,
+      profile.organization_id,
+      carrier_company_id || null,
+      'carrier'
+    );
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Invalid carrier company' },
+      { status: 400 }
+    );
+  }
+
+  const effectiveSharedManagerUserId = is_groupage
+    ? groupageManager?.id ?? null
+    : sharedManager?.id ?? null;
+
   const { data: tripNumberData, error: tripNumberError } = await serviceSupabase
     .rpc('generate_trip_number');
 
@@ -85,6 +140,7 @@ export async function POST(req: Request) {
     status,
     carrier_company_id: carrier_company_id || null,
     assigned_manager_id: assigned_manager_id || null,
+    groupage_responsible_manager_id: is_groupage ? groupageManager?.id ?? null : null,
     truck_plate: truck_plate?.trim() || null,
     trailer_plate: trailer_plate?.trim() || null,
     driver_name: driver_name?.trim() || null,
@@ -108,6 +164,23 @@ export async function POST(req: Request) {
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  try {
+    await replaceTripManagerShare(serviceSupabase, {
+      organizationId: profile.organization_id,
+      tripId: data.id,
+      managerUserId: effectiveSharedManagerUserId,
+      sharedOrganizationId: is_groupage
+        ? body.groupage_shared_organization_id ?? body.shared_organization_id
+        : body.shared_organization_id,
+      sharedBy: user.id,
+    });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to save shared manager' },
+      { status: 400 }
+    );
   }
 
   return NextResponse.json({

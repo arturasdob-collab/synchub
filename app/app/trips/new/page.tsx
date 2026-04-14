@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '@/lib/supabase/client';
+import { PAYMENT_TYPE_OPTIONS } from '@/lib/constants/payment-types';
 
 type CarrierOption = {
   id: string;
@@ -13,15 +14,40 @@ type CarrierOption = {
   payment_term_days: number | null;
 };
 
+type ManagerOption = {
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+};
+
+type OrganizationOption = {
+  id: string;
+  name: string;
+};
+
+function formatManagerLabel(manager: ManagerOption) {
+  return `${manager.first_name || ''} ${manager.last_name || ''}`.trim() || '-';
+}
+
 export default function NewTripPage() {
   const router = useRouter();
 
   const [loading, setLoading] = useState(false);
   const [carriersLoading, setCarriersLoading] = useState(true);
+  const [managersLoading, setManagersLoading] = useState(true);
   const [carriers, setCarriers] = useState<CarrierOption[]>([]);
+  const [managers, setManagers] = useState<ManagerOption[]>([]);
+  const [organizations, setOrganizations] = useState<OrganizationOption[]>([]);
+  const [currentOrganizationId, setCurrentOrganizationId] = useState('');
+  const [sharedManagerSearch, setSharedManagerSearch] = useState('');
+  const [groupageManagerSearch, setGroupageManagerSearch] = useState('');
 
   const [form, setForm] = useState({
     status: 'unconfirmed',
+    shared_manager_user_id: '',
+    shared_organization_id: '',
+    groupage_responsible_manager_id: '',
+    groupage_shared_organization_id: '',
     carrier_company_id: '',
     assigned_manager_id: '',
     truck_plate: '',
@@ -43,7 +69,26 @@ export default function NewTripPage() {
 
   useEffect(() => {
     fetchCarriers();
+    fetchShareOrganizations();
   }, []);
+
+  useEffect(() => {
+    const effectiveOrganizationId = form.is_groupage
+      ? form.groupage_shared_organization_id || currentOrganizationId
+      : form.shared_organization_id || currentOrganizationId;
+
+    if (!effectiveOrganizationId) {
+      setManagers([]);
+      return;
+    }
+
+    void fetchManagers(effectiveOrganizationId);
+  }, [
+    currentOrganizationId,
+    form.groupage_shared_organization_id,
+    form.is_groupage,
+    form.shared_organization_id,
+  ]);
 
   const fetchCarriers = async () => {
     try {
@@ -65,6 +110,63 @@ export default function NewTripPage() {
       toast.error('Failed to load carriers');
     } finally {
       setCarriersLoading(false);
+    }
+  };
+
+  const fetchShareOrganizations = async () => {
+    try {
+      const res = await fetch('/api/organizations/share-targets', {
+        method: 'GET',
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to load organizations');
+        setOrganizations([]);
+        return;
+      }
+
+      setOrganizations(data.organizations || []);
+      setCurrentOrganizationId(data.current_organization_id || '');
+      setForm((prev) => ({
+        ...prev,
+        shared_organization_id:
+          prev.shared_organization_id || data.current_organization_id || '',
+        groupage_shared_organization_id:
+          prev.groupage_shared_organization_id || data.current_organization_id || '',
+      }));
+    } catch (error) {
+      toast.error('Failed to load organizations');
+      setOrganizations([]);
+    }
+  };
+
+  const fetchManagers = async (organizationId: string) => {
+    try {
+      setManagersLoading(true);
+
+      const searchParams = new URLSearchParams();
+      searchParams.set('organizationId', organizationId);
+
+      const res = await fetch(`/api/organization/managers?${searchParams.toString()}`, {
+        method: 'GET',
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to load managers');
+        setManagers([]);
+        return;
+      }
+
+      setManagers(data.managers || []);
+    } catch (error) {
+      toast.error('Failed to load managers');
+      setManagers([]);
+    } finally {
+      setManagersLoading(false);
     }
   };
 
@@ -103,12 +205,68 @@ export default function NewTripPage() {
     ? `${selectedCarrier.name}${selectedCarrier.company_code ? ` (${selectedCarrier.company_code})` : ''}`
     : '';
 
+  const selectedGroupageManager = managers.find(
+    (manager) => manager.id === form.groupage_responsible_manager_id
+  );
+
+  const selectedSharedManager = managers.find(
+    (manager) => manager.id === form.shared_manager_user_id
+  );
+
+  const selectedSharedManagerLabel = selectedSharedManager
+    ? formatManagerLabel(selectedSharedManager)
+    : '';
+
+  const selectedGroupageManagerLabel = selectedGroupageManager
+    ? formatManagerLabel(selectedGroupageManager)
+    : '';
+  const selectedSharedOrganizationId =
+    form.shared_organization_id || currentOrganizationId;
+  const selectedGroupageOrganizationId =
+    form.groupage_shared_organization_id || currentOrganizationId;
+
+  const filteredSharedManagers = useMemo(() => {
+    const q = sharedManagerSearch.trim().toLowerCase();
+
+    if (q.length < 2) return [];
+
+    return managers
+      .filter((manager) =>
+        formatManagerLabel(manager).toLowerCase().includes(q)
+      )
+      .slice(0, 20);
+  }, [managers, sharedManagerSearch]);
+
+  const filteredGroupageManagers = useMemo(() => {
+    const q = groupageManagerSearch.trim().toLowerCase();
+
+    if (q.length < 2) return [];
+
+    return managers
+      .filter((manager) =>
+        formatManagerLabel(manager).toLowerCase().includes(q)
+      )
+      .slice(0, 20);
+  }, [groupageManagerSearch, managers]);
+
   const saveTrip = async () => {
     setLoading(true);
 
     try {
       const payload = {
         ...form,
+        shared_manager_user_id: form.is_groupage
+          ? form.groupage_responsible_manager_id
+          : form.shared_manager_user_id,
+        shared_organization_id: form.is_groupage
+          ? form.groupage_shared_organization_id
+          : form.shared_organization_id,
+        groupage_responsible_manager_id: form.is_groupage
+          ? form.groupage_responsible_manager_id
+          : null,
+        groupage_shared_organization_id: form.is_groupage
+          ? form.groupage_shared_organization_id
+          : null,
         price: form.price === '' ? null : Number(form.price),
         payment_term_days:
           form.payment_term_days === '' ? null : Number(form.payment_term_days),
@@ -153,6 +311,63 @@ export default function NewTripPage() {
             <option value="completed">Completed</option>
           </select>
         </div>
+
+        {!form.is_groupage && (
+            <div className="space-y-2">
+              <label className="block text-sm font-medium mb-1">Link trip to organization and manager</label>
+            <select
+              value={selectedSharedOrganizationId}
+              onChange={(e) => {
+                update('shared_organization_id', e.target.value);
+                update('shared_manager_user_id', '');
+                setSharedManagerSearch('');
+              }}
+              className="w-full border rounded-md px-3 py-2 bg-white"
+            >
+              <option value="">Select organization</option>
+              {organizations.map((organization) => (
+                <option key={organization.id} value={organization.id}>
+                  {organization.name}
+                </option>
+              ))}
+            </select>
+            <input
+              placeholder="Type manager name..."
+              value={sharedManagerSearch}
+              onChange={(e) => {
+                update('shared_manager_user_id', '');
+                setSharedManagerSearch(e.target.value);
+              }}
+              className="w-full border rounded-md px-3 py-2"
+              disabled={managersLoading || !selectedSharedOrganizationId}
+            />
+
+            {sharedManagerSearch.trim().length >= 2 &&
+              sharedManagerSearch !== selectedSharedManagerLabel && (
+                <div className="border rounded-md bg-white max-h-56 overflow-y-auto">
+                  {filteredSharedManagers.length === 0 ? (
+                    <div className="px-3 py-2 text-sm text-slate-500">
+                      No managers found
+                    </div>
+                  ) : (
+                    filteredSharedManagers.map((manager) => (
+                      <button
+                        key={manager.id}
+                        type="button"
+                        onClick={() => {
+                          update('shared_manager_user_id', manager.id);
+                          setSharedManagerSearch(formatManagerLabel(manager));
+                        }}
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 border-b last:border-b-0"
+                      >
+                        {formatManagerLabel(manager)}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+          </div>
+        )}
 
         <div className="space-y-2">
   <label className="block text-sm font-medium">Carrier</label>
@@ -238,11 +453,12 @@ export default function NewTripPage() {
             onChange={(e) => update('payment_type', e.target.value)}
             className="w-full border rounded-md px-3 py-2"
           >
-<option value="">Select payment type</option>
-<option value="bank_after_scan">Bank transfer after scan</option>
-<option value="bank_after_originals">Bank transfer after original documents</option>
-<option value="cash">Cash</option>
-<option value="other">Other</option>
+            <option value="">Select payment type</option>
+            {PAYMENT_TYPE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -263,10 +479,75 @@ export default function NewTripPage() {
           <input
             type="checkbox"
             checked={form.is_groupage}
-            onChange={(e) => update('is_groupage', e.target.checked)}
+            onChange={(e) => {
+              const checked = e.target.checked;
+              update('is_groupage', checked);
+
+              if (!checked) {
+                update('groupage_responsible_manager_id', '');
+                setGroupageManagerSearch('');
+              }
+            }}
           />
           Groupage trip
         </label>
+
+        {form.is_groupage && (
+            <div className="space-y-2">
+              <label className="block text-sm font-medium mb-1">Link groupage to organization and manager</label>
+            <select
+              value={selectedGroupageOrganizationId}
+              onChange={(e) => {
+                update('groupage_shared_organization_id', e.target.value);
+                update('groupage_responsible_manager_id', '');
+                setGroupageManagerSearch('');
+              }}
+              className="w-full border rounded-md px-3 py-2 bg-white"
+            >
+              <option value="">Select organization</option>
+              {organizations.map((organization) => (
+                <option key={organization.id} value={organization.id}>
+                  {organization.name}
+                </option>
+              ))}
+            </select>
+            <input
+              placeholder="Type manager name..."
+              value={groupageManagerSearch}
+              onChange={(e) => {
+                update('groupage_responsible_manager_id', '');
+                setGroupageManagerSearch(e.target.value);
+              }}
+              className="w-full border rounded-md px-3 py-2"
+              disabled={managersLoading || !selectedGroupageOrganizationId}
+            />
+
+            {groupageManagerSearch.trim().length >= 2 &&
+              groupageManagerSearch !== selectedGroupageManagerLabel && (
+                <div className="border rounded-md bg-white max-h-56 overflow-y-auto">
+                  {filteredGroupageManagers.length === 0 ? (
+                    <div className="px-3 py-2 text-sm text-slate-500">
+                      No managers found
+                    </div>
+                  ) : (
+                    filteredGroupageManagers.map((manager) => (
+                      <button
+                        key={manager.id}
+                        type="button"
+                        onClick={() => {
+                          update('groupage_responsible_manager_id', manager.id);
+                          setGroupageManagerSearch(formatManagerLabel(manager));
+                        }}
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 border-b last:border-b-0"
+                      >
+                        {formatManagerLabel(manager)}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+          </div>
+        )}
 
         <textarea
           placeholder="Notes"

@@ -1,12 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase/client';
 import { Loader2, Plus } from 'lucide-react';
-import { useAuth } from '@/lib/auth/AuthProvider';
+import { toast } from 'sonner';
 
-type Company = {
+type CompanyRow = {
   id: string;
   company_code: string;
   name: string;
@@ -15,398 +14,651 @@ type Company = {
   country: string | null;
   is_client: boolean;
   is_carrier: boolean;
+  display_type: 'Client' | 'Carrier' | 'Client / Carrier' | '-';
   rating: number | null;
+  cmr_status: 'Valid' | 'Not valid' | null;
+  created_at: string | null;
+  created_by_user: {
+    first_name: string | null;
+    last_name: string | null;
+  } | null;
 };
+
+type CompaniesFilters = {
+  search: string;
+  type: 'all' | 'client' | 'carrier';
+  company: string;
+  address: string;
+  rating: string;
+  cmr: 'all' | 'valid' | 'not_valid' | 'not_applicable';
+  createdBy: string;
+  createdFrom: string;
+  createdTo: string;
+  rowsPerPage: 20 | 50 | 100;
+};
+
+type HeaderFilterId =
+  | 'company'
+  | 'address'
+  | 'type'
+  | 'rating'
+  | 'cmr'
+  | 'created';
+
+const DEFAULT_FILTERS: CompaniesFilters = {
+  search: '',
+  type: 'all',
+  company: '',
+  address: '',
+  rating: '',
+  cmr: 'all',
+  createdBy: '',
+  createdFrom: '',
+  createdTo: '',
+  rowsPerPage: 20,
+};
+
+function formatPerson(
+  person: { first_name: string | null; last_name: string | null } | null | undefined
+) {
+  if (!person) {
+    return '-';
+  }
+
+  return `${person.first_name || ''} ${person.last_name || ''}`.trim() || '-';
+}
+
+function formatShortCompanyName(value: string | null | undefined) {
+  const normalized = (value || '').trim();
+
+  if (!normalized) {
+    return '-';
+  }
+
+  const parts = normalized.split(/\s+/).filter(Boolean);
+  return parts.slice(0, 2).join(' ');
+}
+
+function formatAddress(row: CompanyRow) {
+  return [row.address, row.city, row.country].filter(Boolean).join(', ') || '-';
+}
+
+function matchesText(value: string | null | undefined, query: string) {
+  if (!query.trim()) {
+    return true;
+  }
+
+  return (value || '').toLowerCase().includes(query.trim().toLowerCase());
+}
+
+function HeaderFilterButton({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-left text-xs font-semibold ${
+        active ? 'bg-slate-200 text-slate-900' : 'text-slate-700 hover:bg-slate-100'
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+function getCmrBadgeClass(status: CompanyRow['cmr_status']) {
+  if (status === 'Valid') {
+    return 'bg-green-100 text-green-700';
+  }
+
+  if (status === 'Not valid') {
+    return 'bg-red-100 text-red-700';
+  }
+
+  return 'bg-slate-100 text-slate-500';
+}
 
 export default function CompaniesPage() {
   const router = useRouter();
-  const { profile } = useAuth();
-
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [loading, setLoading] = useState(true)
-  const [ratingsMap, setRatingsMap] = useState<Record<string, number | null>>({});
-
-  const [searchName, setSearchName] = useState('');
-  const [searchCode, setSearchCode] = useState('');
-  const [nameSuggestions, setNameSuggestions] = useState<any[]>([]);
-  const [codeSuggestions, setCodeSuggestions] = useState<any[]>([]);
-
-  const [page, setPage] = useState(1);
-  const [typeFilter, setTypeFilter] = useState<'all' | 'client' | 'carrier'>('all');
-
-  const limit = 20;
-  const [clientCount, setClientCount] = useState(0);
-  const [carrierCount, setCarrierCount] = useState(0);
-  const [allCount, setAllCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [companies, setCompanies] = useState<CompanyRow[]>([]);
+  const [viewerUserId, setViewerUserId] = useState('');
+  const [filtersHydrated, setFiltersHydrated] = useState(false);
+  const [filters, setFilters] = useState<CompaniesFilters>(DEFAULT_FILTERS);
+  const [activeHeaderFilter, setActiveHeaderFilter] =
+    useState<HeaderFilterId | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
 
   useEffect(() => {
-    fetchCompanies(page);
-  }, [page, typeFilter]);
-  
-  const fetchNameSuggestions = async (value: string) => {
-    if (!profile?.organization_id || !value.trim()) {
-      setNameSuggestions([]);
-      return;
-    }
-  
-    const { data, error } = await supabase
-      .from('companies')
-      .select('id, name')
-      .eq('organization_id', profile.organization_id)
-      .ilike('name', `%${value.trim()}%`)
-      .order('name')
-      .limit(5);
-  
-    if (error || !data) {
-      setNameSuggestions([]);
-      return;
-    }
-  
-setNameSuggestions(data || []);
-    };
-  
-  const fetchCodeSuggestions = async (value: string) => {
-    if (!profile?.organization_id || !value.trim()) {
-      setCodeSuggestions([]);
-      return;
-    }
-  
-    const { data, error } = await supabase
-      .from('companies')
-      .select('id, company_code')
-      .eq('organization_id', profile.organization_id)
-      .ilike('company_code', `%${value.trim()}%`)
-      .order('company_code')
-      .limit(5);
-  
-    if (error || !data) {
-      setCodeSuggestions([]);
-      return;
-    }
-  
-    setCodeSuggestions(data || []);
-};
+    void fetchCompanies();
+  }, []);
 
-  const fetchCompanies = async (targetPage = 1) => {
-    if (!profile?.organization_id) return;
-  
-    setLoading(true);
-  
-    const from = (targetPage - 1) * limit;
-    const to = targetPage * limit - 1;
-  
-    let query = supabase
-      .from('companies')
-      .select('*')
-      .eq('organization_id', profile.organization_id)
-      .order('name')
-      .range(from, to);
-  
-    if (searchName.trim()) {
-      query = query.ilike('name', `%${searchName.trim()}%`);
-    }
-  
-    if (searchCode.trim()) {
-      query = query.ilike('company_code', `%${searchCode.trim()}%`);
-    }
-  
-    if (typeFilter === 'client') {
-      query = query.eq('is_client', true);
-    }
-  
-    if (typeFilter === 'carrier') {
-      query = query.eq('is_carrier', true);
-    }
-  
-    const { data, error } = await query;
-  
-    if (error) {
-      console.error('COMPANIES SEARCH ERROR:', error);
-      setCompanies([]);
-      setLoading(false);
+  useEffect(() => {
+    if (!viewerUserId) {
       return;
     }
-  
-    const companiesData = data || [];
-    setCompanies(companiesData);
-  
-    const { count: totalCount } = await supabase
-      .from('companies')
-      .select('*', { count: 'exact', head: true })
-      .eq('organization_id', profile.organization_id);
-  
-    const { count: totalClientCount } = await supabase
-      .from('companies')
-      .select('*', { count: 'exact', head: true })
-      .eq('organization_id', profile.organization_id)
-      .eq('is_client', true);
-  
-    const { count: totalCarrierCount } = await supabase
-      .from('companies')
-      .select('*', { count: 'exact', head: true })
-      .eq('organization_id', profile.organization_id)
-      .eq('is_carrier', true);
-  
-    setAllCount(totalCount || 0);
-    setClientCount(totalClientCount || 0);
-    setCarrierCount(totalCarrierCount || 0);
-  
-    if (companiesData.length > 0) {
-      const ids = companiesData.map((c) => c.id);
-  
-      const { data: commentsData } = await supabase
-        .from('company_comments')
-        .select('company_id, rating')
-        .in('company_id', ids);
-  
-      const map: Record<string, number | null> = {};
-  
-      ids.forEach((id) => {
-        const ratings = (commentsData || [])
-          .filter((c) => c.company_id === id && c.rating > 0)
-          .map((c) => c.rating);
-  
-        if (!ratings.length) {
-          map[id] = null;
-        } else {
-          const avg = ratings.reduce((sum, r) => sum + r, 0) / ratings.length;
-          map[id] = Number(avg.toFixed(1));
-        }
+
+    try {
+      const saved = window.localStorage.getItem(
+        `synchub.companies.filters.${viewerUserId}`
+      );
+
+      if (!saved) {
+        setFiltersHydrated(true);
+        return;
+      }
+
+      const parsed = JSON.parse(saved) as Partial<CompaniesFilters>;
+
+      setFilters({
+        ...DEFAULT_FILTERS,
+        ...parsed,
+        rowsPerPage:
+          parsed.rowsPerPage === 20 ||
+          parsed.rowsPerPage === 50 ||
+          parsed.rowsPerPage === 100
+            ? parsed.rowsPerPage
+            : DEFAULT_FILTERS.rowsPerPage,
       });
-  
-      setRatingsMap(map);
-    } else {
-      setRatingsMap({});
+    } catch (error) {
+      console.error('Failed to hydrate company filters:', error);
+      setFilters(DEFAULT_FILTERS);
+    } finally {
+      setFiltersHydrated(true);
     }
-  
-    setLoading(false);
+  }, [viewerUserId]);
+
+  useEffect(() => {
+    if (!viewerUserId || !filtersHydrated) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      `synchub.companies.filters.${viewerUserId}`,
+      JSON.stringify(filters)
+    );
+  }, [filters, filtersHydrated, viewerUserId]);
+
+  useEffect(() => {
+    const handleOutsideClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+
+      if (!target?.closest('[data-company-header-filter-root="true"]')) {
+        setActiveHeaderFilter(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleOutsideClick);
+
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+    };
+  }, []);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filters]);
+
+  const fetchCompanies = async () => {
+    try {
+      setLoading(true);
+
+      const res = await fetch('/api/companies/list', {
+        method: 'GET',
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to load companies');
+        setCompanies([]);
+        return;
+      }
+
+      setCompanies(data.companies || []);
+      setViewerUserId(data.viewer_user_id || '');
+    } catch (error) {
+      console.error('FETCH COMPANIES ERROR:', error);
+      toast.error('Failed to load companies');
+      setCompanies([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const openCompany = (id: string) => {
-    router.push(`/app/companies/${id}`);
+  const filteredCompanies = useMemo(() => {
+    const globalSearch = filters.search.trim().toLowerCase();
+
+    return companies.filter((company) => {
+      const creator = formatPerson(company.created_by_user);
+      const addressText = formatAddress(company);
+      const searchableText = [
+        company.name,
+        company.company_code,
+        addressText,
+        company.display_type,
+        company.rating !== null ? String(company.rating) : '',
+        company.cmr_status || '',
+        creator,
+        company.created_at ? new Date(company.created_at).toLocaleString() : '',
+      ]
+        .join(' ')
+        .toLowerCase();
+
+      const matchesGlobalSearch =
+        !globalSearch || searchableText.includes(globalSearch);
+
+      const matchesType =
+        filters.type === 'all'
+          ? true
+          : filters.type === 'client'
+          ? company.is_client
+          : company.is_carrier;
+
+      const matchesCompany =
+        matchesText(company.name, filters.company) ||
+        matchesText(company.company_code, filters.company);
+
+      const matchesAddress = matchesText(addressText, filters.address);
+      const matchesRating = matchesText(
+        company.rating !== null ? String(company.rating) : '',
+        filters.rating
+      );
+
+      const matchesCmr =
+        filters.cmr === 'all'
+          ? true
+          : filters.cmr === 'valid'
+          ? company.cmr_status === 'Valid'
+          : filters.cmr === 'not_valid'
+          ? company.cmr_status === 'Not valid'
+          : company.cmr_status === null;
+
+      const matchesCreatedBy = matchesText(creator, filters.createdBy);
+
+      const createdDate = company.created_at ? new Date(company.created_at) : null;
+      const matchesCreatedFrom =
+        !filters.createdFrom ||
+        (createdDate &&
+          createdDate >= new Date(`${filters.createdFrom}T00:00:00`));
+      const matchesCreatedTo =
+        !filters.createdTo ||
+        (createdDate &&
+          createdDate <= new Date(`${filters.createdTo}T23:59:59`));
+
+      return (
+        matchesGlobalSearch &&
+        matchesType &&
+        matchesCompany &&
+        matchesAddress &&
+        matchesRating &&
+        matchesCmr &&
+        matchesCreatedBy &&
+        matchesCreatedFrom &&
+        matchesCreatedTo
+      );
+    });
+  }, [companies, filters]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredCompanies.length / filters.rowsPerPage));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+
+  const paginatedCompanies = filteredCompanies.slice(
+    (safeCurrentPage - 1) * filters.rowsPerPage,
+    safeCurrentPage * filters.rowsPerPage
+  );
+
+  const updateFilter = <K extends keyof CompaniesFilters>(
+    key: K,
+    value: CompaniesFilters[K]
+  ) => {
+    setFilters((prev) => ({
+      ...prev,
+      [key]: value,
+    }));
+  };
+
+  const resetFilters = () => {
+    setFilters(DEFAULT_FILTERS);
+    setCurrentPage(1);
+    setActiveHeaderFilter(null);
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
+    <div className="mx-auto max-w-7xl space-y-6 p-6">
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
+        <div />
 
-      <div className="flex items-center justify-between">
-
-        <h1 className="text-3xl font-bold">Companies</h1>
+        <div className="text-center">
+          <h1 className="text-3xl font-bold">Companies</h1>
+        </div>
 
         <button
           onClick={() => router.push('/app/companies/new')}
-          className="flex items-center gap-2 bg-slate-900 text-white px-4 py-2 rounded-md"
+          className="justify-self-end inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-white hover:bg-slate-800"
         >
           <Plus size={16} />
           Add Company
         </button>
-
       </div>
 
-      <div className="flex gap-4">
-  <div className="relative">
-    <input
-      placeholder="Search company name"
-      value={searchName}
-      onChange={(e) => {
-        const value = e.target.value;
-        setSearchName(value);
-        fetchNameSuggestions(value);
-      }}
-      className="border rounded-md px-3 py-2 text-sm w-48"
-    />
+      <div className="rounded-2xl border bg-white p-4">
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <input
+            placeholder="Search..."
+            value={filters.search}
+            onChange={(e) => updateFilter('search', e.target.value)}
+            className="w-full max-w-xs rounded-md border px-3 py-2"
+          />
 
-    {nameSuggestions.length > 0 && (
-      <div className="border rounded-md mt-1 bg-white shadow w-48 absolute z-10">
-{nameSuggestions.map((item, i) => (
-  <div
-    key={i}
-    onClick={() => {
-      setSearchName(item.name);
-      setNameSuggestions([]);
-      router.push(`/app/companies/${item.id}`);
-    }}
-    className="px-3 py-2 text-sm hover:bg-gray-100 cursor-pointer"
-  >
-    {item.name}
-  </div>
-))}
+          <div className="inline-flex overflow-hidden rounded-md border">
+            <button
+              type="button"
+              onClick={() => updateFilter('type', 'all')}
+              className={`px-4 py-2 text-sm ${
+                filters.type === 'all'
+                  ? 'bg-slate-900 text-white'
+                  : 'bg-white text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              All
+            </button>
+            <button
+              type="button"
+              onClick={() => updateFilter('type', 'client')}
+              className={`border-l px-4 py-2 text-sm ${
+                filters.type === 'client'
+                  ? 'bg-slate-900 text-white'
+                  : 'bg-white text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              Client
+            </button>
+            <button
+              type="button"
+              onClick={() => updateFilter('type', 'carrier')}
+              className={`border-l px-4 py-2 text-sm ${
+                filters.type === 'carrier'
+                  ? 'bg-slate-900 text-white'
+                  : 'bg-white text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              Carrier
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={resetFilters}
+            className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm hover:bg-slate-50"
+          >
+            Reset filters
+          </button>
+        </div>
       </div>
-    )}
-  </div>
 
-  <div className="relative">
-    <input
-      placeholder="Search company code"
-      value={searchCode}
-      onChange={(e) => {
-        const value = e.target.value;
-        setSearchCode(value);
-        fetchCodeSuggestions(value);
-      }}
-      className="border rounded-md px-3 py-2 text-sm w-48"
-    />
-
-    {codeSuggestions.length > 0 && (
-      <div className="border rounded-md mt-1 bg-white shadow w-48 absolute z-10">
-{codeSuggestions.map((item, i) => (
-  <div
-    key={i}
-    onClick={() => {
-      setSearchCode(item.company_code);
-      setCodeSuggestions([]);
-      router.push(`/app/companies/${item.id}`);
-    }}
-    className="px-3 py-2 text-sm hover:bg-gray-100 cursor-pointer"
-  >
-    {item.company_code}
-  </div>
-))}
-      </div>
-    )}
-  </div>
-
-  <button
-    onClick={() => {
-      setPage(1);
-      fetchCompanies(1);
-    }}
-    className="border px-4 py-2 rounded-md text-sm"
-  >
-    Search
-  </button>
-</div>
-      <div className="flex gap-3">
-  <button
-    onClick={() => {
-      setTypeFilter('all');
-      setPage(1);
-    }}
-    className={`px-4 py-2 rounded-md text-sm border ${
-      typeFilter === 'all'
-        ? 'bg-slate-900 text-white border-slate-900'
-        : 'bg-white text-slate-700 border-slate-300'
-    }`}
-  >
-    All ({allCount})
-  </button>
-
-  <button
-    onClick={() => {
-      setTypeFilter('client');
-      setPage(1);
-    }}
-    className={`px-4 py-2 rounded-md text-sm border ${
-      typeFilter === 'client'
-        ? 'bg-slate-900 text-white border-slate-900'
-        : 'bg-white text-slate-700 border-slate-300'
-    }`}
-  >
-    Client ({clientCount})
-  </button>
-
-  <button
-    onClick={() => {
-      setTypeFilter('carrier');
-      setPage(1);
-    }}
-    className={`px-4 py-2 rounded-md text-sm border ${
-      typeFilter === 'carrier'
-        ? 'bg-slate-900 text-white border-slate-900'
-        : 'bg-white text-slate-700 border-slate-300'
-    }`}
-  >
-    Carrier ({carrierCount})
-  </button>
-</div>
-
-      <div className="border rounded-xl overflow-hidden">
-
-        {loading ? (
-          <div className="flex justify-center p-12">
-            <Loader2 className="animate-spin" />
+      <div className="overflow-hidden rounded-2xl border bg-white">
+        {loading && !filtersHydrated ? (
+          <div className="flex justify-center p-10">
+            <Loader2 className="h-8 w-8 animate-spin" />
           </div>
         ) : (
-          <table className="w-full text-sm">
-
-            <thead className="bg-slate-50 border-b">
-              <tr>
-                <th className="text-left p-3">Company Code</th>
-                <th className="text-left p-3">Name</th>
-                <th className="text-left p-3">Address</th>
-                <th className="text-left p-3">Type</th>
-                <th className="text-left p-3">Rating</th>
-              </tr>
-            </thead>
-
-            <tbody>
-
-              {companies.map((c) => {
-
-                const type = [
-                  c.is_client ? 'Client' : null,
-                  c.is_carrier ? 'Carrier' : null,
-                ]
-                  .filter(Boolean)
-                  .join(', ');
-
-                const address =
-                  `${c.address || ''} ${c.city || ''} ${c.country || ''}`;
-
-                return (
-                  <tr
-                    key={c.id}
-                    onClick={() => openCompany(c.id)}
-                    className="border-b hover:bg-slate-50 cursor-pointer"
-                  >
-
-                    <td className="p-3">{c.company_code}</td>
-
-                    <td className="p-3 font-medium">{c.name}</td>
-
-                    <td className="p-3">{address}</td>
-
-                    <td className="p-3">{type}</td>
-
-                    <td className="p-3">
-  {ratingsMap[c.id]
-    ? '★'.repeat(Math.round(ratingsMap[c.id]!)) + ` (${ratingsMap[c.id]})`
-    : '-'}
-</td>
+          <div className="overflow-x-auto">
+            <table className="min-w-[980px] w-full text-sm">
+              <thead className="border-b bg-slate-50">
+                <tr>
+                  <th className="px-2 py-2 text-left align-top" data-company-header-filter-root="true">
+                    <div className="relative">
+                      <HeaderFilterButton
+                        label="Company"
+                        active={activeHeaderFilter === 'company'}
+                        onClick={() =>
+                          setActiveHeaderFilter((prev) => (prev === 'company' ? null : 'company'))
+                        }
+                      />
+                      {activeHeaderFilter === 'company' ? (
+                        <div className="absolute left-0 top-full z-20 mt-2 w-52 rounded-xl border bg-white p-2 shadow-lg">
+                          <input
+                            value={filters.company}
+                            onChange={(e) => updateFilter('company', e.target.value)}
+                            placeholder="Name or code"
+                            className="w-full rounded-md border px-2 py-2 text-sm"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  </th>
+                  <th className="px-2 py-2 text-left align-top" data-company-header-filter-root="true">
+                    <div className="relative">
+                      <HeaderFilterButton
+                        label="Address"
+                        active={activeHeaderFilter === 'address'}
+                        onClick={() =>
+                          setActiveHeaderFilter((prev) => (prev === 'address' ? null : 'address'))
+                        }
+                      />
+                      {activeHeaderFilter === 'address' ? (
+                        <div className="absolute left-0 top-full z-20 mt-2 w-56 rounded-xl border bg-white p-2 shadow-lg">
+                          <input
+                            value={filters.address}
+                            onChange={(e) => updateFilter('address', e.target.value)}
+                            placeholder="Address"
+                            className="w-full rounded-md border px-2 py-2 text-sm"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  </th>
+                  <th className="px-2 py-2 text-left align-top" data-company-header-filter-root="true">
+                    <div className="relative">
+                      <HeaderFilterButton
+                        label="Type"
+                        active={activeHeaderFilter === 'type'}
+                        onClick={() =>
+                          setActiveHeaderFilter((prev) => (prev === 'type' ? null : 'type'))
+                        }
+                      />
+                      {activeHeaderFilter === 'type' ? (
+                        <div className="absolute left-0 top-full z-20 mt-2 w-40 rounded-xl border bg-white p-2 shadow-lg">
+                          <select
+                            value={filters.type}
+                            onChange={(e) =>
+                              updateFilter('type', e.target.value as CompaniesFilters['type'])
+                            }
+                            className="w-full rounded-md border px-2 py-2 text-sm"
+                          >
+                            <option value="all">All</option>
+                            <option value="client">Client</option>
+                            <option value="carrier">Carrier</option>
+                          </select>
+                        </div>
+                      ) : null}
+                    </div>
+                  </th>
+                  <th className="px-2 py-2 text-left align-top" data-company-header-filter-root="true">
+                    <div className="relative">
+                      <HeaderFilterButton
+                        label="Rating"
+                        active={activeHeaderFilter === 'rating'}
+                        onClick={() =>
+                          setActiveHeaderFilter((prev) => (prev === 'rating' ? null : 'rating'))
+                        }
+                      />
+                      {activeHeaderFilter === 'rating' ? (
+                        <div className="absolute left-0 top-full z-20 mt-2 w-36 rounded-xl border bg-white p-2 shadow-lg">
+                          <input
+                            value={filters.rating}
+                            onChange={(e) => updateFilter('rating', e.target.value)}
+                            placeholder="Rating"
+                            className="w-full rounded-md border px-2 py-2 text-sm"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  </th>
+                  <th className="px-2 py-2 text-left align-top" data-company-header-filter-root="true">
+                    <div className="relative">
+                      <HeaderFilterButton
+                        label="CMR"
+                        active={activeHeaderFilter === 'cmr'}
+                        onClick={() =>
+                          setActiveHeaderFilter((prev) => (prev === 'cmr' ? null : 'cmr'))
+                        }
+                      />
+                      {activeHeaderFilter === 'cmr' ? (
+                        <div className="absolute left-0 top-full z-20 mt-2 w-40 rounded-xl border bg-white p-2 shadow-lg">
+                          <select
+                            value={filters.cmr}
+                            onChange={(e) =>
+                              updateFilter('cmr', e.target.value as CompaniesFilters['cmr'])
+                            }
+                            className="w-full rounded-md border px-2 py-2 text-sm"
+                          >
+                            <option value="all">All</option>
+                            <option value="valid">Valid</option>
+                            <option value="not_valid">Not valid</option>
+                            <option value="not_applicable">-</option>
+                          </select>
+                        </div>
+                      ) : null}
+                    </div>
+                  </th>
+                  <th className="px-2 py-2 text-left align-top" data-company-header-filter-root="true">
+                    <div className="relative">
+                      <HeaderFilterButton
+                        label="Created"
+                        active={activeHeaderFilter === 'created'}
+                        onClick={() =>
+                          setActiveHeaderFilter((prev) => (prev === 'created' ? null : 'created'))
+                        }
+                      />
+                      {activeHeaderFilter === 'created' ? (
+                        <div className="absolute right-0 top-full z-20 mt-2 w-60 rounded-xl border bg-white p-2 shadow-lg space-y-2">
+                          <input
+                            value={filters.createdBy}
+                            onChange={(e) => updateFilter('createdBy', e.target.value)}
+                            placeholder="Creator"
+                            className="w-full rounded-md border px-2 py-2 text-sm"
+                          />
+                          <input
+                            type="date"
+                            value={filters.createdFrom}
+                            onChange={(e) => updateFilter('createdFrom', e.target.value)}
+                            className="w-full rounded-md border px-2 py-2 text-sm"
+                          />
+                          <input
+                            type="date"
+                            value={filters.createdTo}
+                            onChange={(e) => updateFilter('createdTo', e.target.value)}
+                            className="w-full rounded-md border px-2 py-2 text-sm"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredCompanies.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-10 text-center text-slate-500">
+                      No companies found
+                    </td>
                   </tr>
-                );
-              })}
-
-            </tbody>
-
-          </table>
+                ) : (
+                  paginatedCompanies.map((company) => (
+                    <tr
+                      key={company.id}
+                      onClick={() => router.push(`/app/companies/${company.id}`)}
+                      className="cursor-pointer border-b hover:bg-slate-50"
+                    >
+                      <td className="px-2 py-2">
+                        <div className="font-medium">{formatShortCompanyName(company.name)}</div>
+                        <div className="text-xs text-slate-500">
+                          {company.company_code || '-'}
+                        </div>
+                      </td>
+                      <td className="px-2 py-2">{formatAddress(company)}</td>
+                      <td className="px-2 py-2">{company.display_type}</td>
+                      <td className="px-2 py-2">
+                        {company.rating !== null ? company.rating.toFixed(1) : '-'}
+                      </td>
+                      <td className="px-2 py-2">
+                        <span
+                          className={`inline-flex rounded-md px-2 py-1 text-xs font-medium ${getCmrBadgeClass(
+                            company.cmr_status
+                          )}`}
+                        >
+                          {company.cmr_status || '-'}
+                        </span>
+                      </td>
+                      <td className="px-2 py-2">
+                        <div className="whitespace-nowrap">
+                          <div>
+                            {company.created_at
+                              ? new Date(company.created_at).toLocaleDateString()
+                              : '-'}
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            {formatPerson(company.created_by_user)}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         )}
-
       </div>
 
-      <div className="flex justify-center gap-4">
+      <div className="pt-4">
+        <div className="flex flex-wrap items-center justify-center gap-6">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-slate-600">Rows per page</span>
+            <select
+              value={filters.rowsPerPage}
+              onChange={(e) =>
+                updateFilter(
+                  'rowsPerPage',
+                  Number(e.target.value) as CompaniesFilters['rowsPerPage']
+                )
+              }
+              className="rounded-md border px-3 py-2 text-sm"
+            >
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+            </select>
+          </div>
 
-        <button
-          onClick={() => setPage(page - 1)}
-          disabled={page === 1}
-          className="border px-4 py-2 rounded-md"
-        >
-          Prev
-        </button>
+          <button
+            onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+            disabled={safeCurrentPage === 1}
+            className="rounded-md border px-6 py-2 text-sm disabled:opacity-50"
+          >
+            Prev
+          </button>
 
-        <div className="px-4 py-2">
-          Page {page}
+          <span className="text-sm text-slate-700">Page {safeCurrentPage}</span>
+
+          <button
+            onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+            disabled={safeCurrentPage === totalPages}
+            className="rounded-md border px-6 py-2 text-sm disabled:opacity-50"
+          >
+            Next
+          </button>
         </div>
-
-        <button
-          onClick={() => setPage(page + 1)}
-          className="border px-4 py-2 rounded-md"
-        >
-          Next
-        </button>
-
       </div>
-
     </div>
   );
 }

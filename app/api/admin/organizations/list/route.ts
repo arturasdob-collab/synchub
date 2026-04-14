@@ -4,6 +4,17 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
+function formatOrganizationType(value: string | null) {
+  if (!value) return '-';
+
+  if (value === 'terminal') return 'Terminal';
+  if (value === 'warehouse') return 'Warehouse';
+  if (value === 'partner') return 'Partner';
+  if (value === 'company') return 'Company';
+
+  return value;
+}
+
 export async function GET(req: NextRequest) {
   try {
     if (!supabaseUrl || !serviceKey) {
@@ -59,7 +70,9 @@ export async function GET(req: NextRequest) {
 
     const { data: organizations, error: organizationsError } = await adminClient
       .from('organizations')
-      .select('id, name, created_at')
+      .select(
+        'id, name, type, company_code, address, city, postal_code, country, created_at'
+      )
       .order('name', { ascending: true });
 
     if (organizationsError) {
@@ -83,7 +96,9 @@ export async function GET(req: NextRequest) {
           .eq('organization_id', org.id);
 
         if (usersCountError) {
-          throw new Error(`Failed to count users for organization ${org.name}: ${usersCountError.message}`);
+          throw new Error(
+            `Failed to count users for organization ${org.name}: ${usersCountError.message}`
+          );
         }
 
         const { count: invitesCount, error: invitesCountError } = await adminClient
@@ -92,11 +107,14 @@ export async function GET(req: NextRequest) {
           .eq('organization_id', org.id);
 
         if (invitesCountError) {
-          throw new Error(`Failed to count invites for organization ${org.name}: ${invitesCountError.message}`);
+          throw new Error(
+            `Failed to count invites for organization ${org.name}: ${invitesCountError.message}`
+          );
         }
 
         return {
           ...org,
+          display_type: formatOrganizationType(org.type ?? null),
           users_count: usersCount ?? 0,
           pending_invites_count: invitesCount ?? 0,
         };
@@ -104,7 +122,10 @@ export async function GET(req: NextRequest) {
     );
 
     return NextResponse.json(
-      { organizations: organizationsWithCounts },
+      {
+        viewer_user_id: caller.id,
+        organizations: organizationsWithCounts,
+      },
       { status: 200 }
     );
   } catch (e: any) {

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/auth-helpers-nextjs';
+import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 
 export async function POST(req: Request) {
@@ -17,6 +18,11 @@ export async function POST(req: Request) {
         remove() {},
       },
     }
+  );
+
+  const serviceSupabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
   const {
@@ -46,7 +52,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const { data: profile } = await supabase
+  const { data: profile } = await serviceSupabase
     .from('user_profiles')
     .select('organization_id')
     .eq('id', user.id)
@@ -59,7 +65,21 @@ export async function POST(req: Request) {
     );
   }
 
-  const { error } = await supabase
+  const { data: contact } = await serviceSupabase
+    .from('company_contacts')
+    .select('id')
+    .eq('id', id)
+    .eq('organization_id', profile.organization_id)
+    .single();
+
+  if (!contact) {
+    return NextResponse.json(
+      { error: 'Contact not found in your organization' },
+      { status: 404 }
+    );
+  }
+
+  const { error } = await serviceSupabase
     .from('company_contacts')
     .update({
       first_name,

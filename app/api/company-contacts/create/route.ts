@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/auth-helpers-nextjs';
+import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 
 export async function POST(req: Request) {
@@ -17,6 +18,11 @@ export async function POST(req: Request) {
         remove() {},
       },
     }
+  );
+
+  const serviceSupabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
   const {
@@ -46,7 +52,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const { data: profile } = await supabase
+  const { data: profile } = await serviceSupabase
     .from('user_profiles')
     .select('organization_id')
     .eq('id', user.id)
@@ -59,7 +65,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const { data: company } = await supabase
+  const { data: company } = await serviceSupabase
     .from('companies')
     .select('id, organization_id')
     .eq('id', company_id)
@@ -73,7 +79,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const { error } = await supabase.from('company_contacts').insert({
+  const { data, error } = await serviceSupabase.from('company_contacts').insert({
     company_id,
     organization_id: profile.organization_id,
     first_name,
@@ -83,11 +89,11 @@ export async function POST(req: Request) {
     email,
     notes,
     created_by: user.id,
-  });
+  }).select('id, first_name, last_name, phone, email').single();
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ success: true });
+  return NextResponse.json({ success: true, contact: data });
 }

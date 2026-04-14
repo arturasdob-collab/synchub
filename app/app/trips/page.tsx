@@ -2,14 +2,13 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase/client';
 import { Loader2, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 
 type TripRow = {
   id: string;
   trip_number: string;
-  status: 'unconfirmed' | 'confirmed' | 'completed';
+  status: 'unconfirmed' | 'confirmed' | 'active' | 'completed';
   truck_plate: string | null;
   trailer_plate: string | null;
   driver_name: string | null;
@@ -18,117 +17,237 @@ type TripRow = {
   payment_type: string | null;
   vat_rate: string | null;
   is_groupage: boolean;
+  display_type: 'Groupage' | 'Regular';
   created_at: string;
   carrier: {
     name: string | null;
     company_code: string | null;
   } | null;
+  linked_manager: {
+    id: string | null;
+    name: string;
+  } | null;
+  can_view_financials: boolean;
   created_by_user: {
     first_name: string | null;
     last_name: string | null;
   } | null;
 };
 
+type TripsFilters = {
+  search: string;
+  status: string;
+  trip: string;
+  carrier: string;
+  type: string;
+  driver: string;
+  truckTrailer: string;
+  price: string;
+  linked: string;
+  createdBy: string;
+  createdFrom: string;
+  createdTo: string;
+  rowsPerPage: number;
+};
+
+type HeaderFilterId =
+  | 'status'
+  | 'trip'
+  | 'carrier'
+  | 'type'
+  | 'driver'
+  | 'truck_trailer'
+  | 'price'
+  | 'linked'
+  | 'created';
+
+const DEFAULT_FILTERS: TripsFilters = {
+  search: '',
+  status: 'all',
+  trip: '',
+  carrier: '',
+  type: 'all',
+  driver: '',
+  truckTrailer: '',
+  price: '',
+  linked: '',
+  createdBy: '',
+  createdFrom: '',
+  createdTo: '',
+  rowsPerPage: 20,
+};
+
+function formatPerson(
+  person: { first_name: string | null; last_name: string | null } | null | undefined
+) {
+  if (!person) return '-';
+
+  return `${person.first_name || ''} ${person.last_name || ''}`.trim() || '-';
+}
+
+function formatShortCompanyName(value: string | null | undefined) {
+  const normalized = (value || '').trim();
+
+  if (!normalized) {
+    return '-';
+  }
+
+  const parts = normalized.split(/\s+/).filter(Boolean);
+  return parts.slice(0, 2).join(' ');
+}
+
+function formatStatusLabel(status: TripRow['status']) {
+  if (status === 'unconfirmed') return 'Unconfirmed';
+  if (status === 'confirmed') return 'Confirmed';
+  if (status === 'active') return 'Active';
+  if (status === 'completed') return 'Completed';
+  return status;
+}
+
+function getStatusBadgeClass(status: TripRow['status']) {
+  if (status === 'unconfirmed') {
+    return 'bg-yellow-100 text-yellow-800';
+  }
+  if (status === 'confirmed') {
+    return 'bg-blue-100 text-blue-800';
+  }
+  if (status === 'active') {
+    return 'bg-indigo-100 text-indigo-800';
+  }
+  return 'bg-green-100 text-green-800';
+}
+
+function matchesText(value: string | null | undefined, query: string) {
+  if (!query.trim()) {
+    return true;
+  }
+
+  return (value || '').toLowerCase().includes(query.trim().toLowerCase());
+}
+
+function HeaderFilterButton({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-left text-xs font-semibold ${
+        active ? 'bg-slate-200 text-slate-900' : 'text-slate-700 hover:bg-slate-100'
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
 export default function TripsPage() {
   const router = useRouter();
-
   const [loading, setLoading] = useState(true);
   const [trips, setTrips] = useState<TripRow[]>([]);
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [createdByFilter, setCreatedByFilter] = useState('');
-  const [selectedCreatedBy, setSelectedCreatedBy] = useState('');
-  const [tripTypeFilter, setTripTypeFilter] = useState('all');
+  const [viewerUserId, setViewerUserId] = useState('');
+  const [filtersHydrated, setFiltersHydrated] = useState(false);
+  const [filters, setFilters] = useState<TripsFilters>(DEFAULT_FILTERS);
+  const [activeHeaderFilter, setActiveHeaderFilter] =
+    useState<HeaderFilterId | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
-  const [rowsPerPage, setRowsPerPage] = useState(20);
-  const [createdFrom, setCreatedFrom] = useState('');
-const [createdTo, setCreatedTo] = useState('');
 
   useEffect(() => {
-    fetchTrips();
+    void fetchTrips();
+  }, []);
+
+  useEffect(() => {
+    if (!viewerUserId) {
+      return;
+    }
+
+    try {
+      const saved = window.localStorage.getItem(
+        `synchub.trips.filters.${viewerUserId}`
+      );
+
+      if (!saved) {
+        setFiltersHydrated(true);
+        return;
+      }
+
+      const parsed = JSON.parse(saved) as Partial<TripsFilters>;
+
+      setFilters({
+        ...DEFAULT_FILTERS,
+        ...parsed,
+        rowsPerPage:
+          parsed.rowsPerPage === 20 ||
+          parsed.rowsPerPage === 50 ||
+          parsed.rowsPerPage === 100
+            ? parsed.rowsPerPage
+            : DEFAULT_FILTERS.rowsPerPage,
+      });
+    } catch (error) {
+      console.error('Failed to hydrate trip filters:', error);
+      setFilters(DEFAULT_FILTERS);
+    } finally {
+      setFiltersHydrated(true);
+    }
+  }, [viewerUserId]);
+
+  useEffect(() => {
+    if (!viewerUserId || !filtersHydrated) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      `synchub.trips.filters.${viewerUserId}`,
+      JSON.stringify(filters)
+    );
+  }, [filters, filtersHydrated, viewerUserId]);
+
+  useEffect(() => {
+    const handleOutsideClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+
+      if (!target?.closest('[data-trip-header-filter-root="true"]')) {
+        setActiveHeaderFilter(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleOutsideClick);
+
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+    };
   }, []);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [search, statusFilter, createdByFilter, selectedCreatedBy, tripTypeFilter, rowsPerPage, createdFrom, createdTo]);
+  }, [filters]);
 
   const fetchTrips = async () => {
     try {
       setLoading(true);
 
-      const { data, error } = await supabase
-        .from('trips')
-        .select(`
-          id,
-          trip_number,
-          status,
-          truck_plate,
-          trailer_plate,
-          driver_name,
-          price,
-          payment_term_days,
-          payment_type,
-          vat_rate,
-          is_groupage,
-          created_at,
-          carrier:carrier_company_id (
-            name,
-            company_code
-          ),
-          created_by_user:created_by (
-            first_name,
-            last_name
-          )
-        `)
-        .order('created_at', { ascending: false });
+      const res = await fetch('/api/trips/list', {
+        method: 'GET',
+      });
 
-      if (error) {
-        console.error('FETCH TRIPS ERROR:', error);
-        toast.error('Failed to load trips');
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to load trips');
         setTrips([]);
         return;
       }
 
-      const normalized: TripRow[] = (data || []).map((item: any) => {
-        const carrier = Array.isArray(item.carrier)
-          ? item.carrier[0] ?? null
-          : item.carrier;
-
-        const createdByUser = Array.isArray(item.created_by_user)
-          ? item.created_by_user[0] ?? null
-          : item.created_by_user;
-
-        return {
-          id: item.id,
-          trip_number: item.trip_number,
-          status: item.status,
-          truck_plate: item.truck_plate ?? null,
-          trailer_plate: item.trailer_plate ?? null,
-          driver_name: item.driver_name ?? null,
-          price: item.price ?? null,
-          payment_term_days: item.payment_term_days ?? null,
-          payment_type: item.payment_type ?? null,
-          vat_rate: item.vat_rate ?? null,
-          is_groupage: !!item.is_groupage,
-          created_at: item.created_at,
-          carrier: carrier
-            ? {
-                name: carrier.name ?? null,
-                company_code: carrier.company_code ?? null,
-              }
-            : null,
-          created_by_user: createdByUser
-            ? {
-                first_name: createdByUser.first_name ?? null,
-                last_name: createdByUser.last_name ?? null,
-              }
-            : null,
-        };
-      });
-
-      setTrips(normalized);
+      setTrips(data.trips || []);
+      setViewerUserId(data.viewer_user_id || '');
     } catch (error) {
-      console.error('FETCH TRIPS UNEXPECTED ERROR:', error);
+      console.error('FETCH TRIPS ERROR:', error);
       toast.error('Failed to load trips');
       setTrips([]);
     } finally {
@@ -136,126 +255,123 @@ const [createdTo, setCreatedTo] = useState('');
     }
   };
 
-  const createdByOptions = useMemo(() => {
-    const uniqueMap = new Map<string, string>();
-
-    trips.forEach((trip) => {
-      const firstName = trip.created_by_user?.first_name || '';
-      const lastName = trip.created_by_user?.last_name || '';
-      const fullName = `${firstName} ${lastName}`.trim();
-
-      if (fullName) {
-        uniqueMap.set(fullName, fullName);
-      }
-    });
-
-    return Array.from(uniqueMap.values()).sort((a, b) => a.localeCompare(b));
-  }, [trips]);
-
-  const filteredCreatedByOptions = useMemo(() => {
-    const q = createdByFilter.trim().toLowerCase();
-
-    if (!q) return createdByOptions.slice(0, 20);
-
-    return createdByOptions
-      .filter((name) => name.toLowerCase().includes(q))
-      .slice(0, 20);
-  }, [createdByOptions, createdByFilter]);
-
   const filteredTrips = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const globalSearch = filters.search.trim().toLowerCase();
 
     return trips.filter((trip) => {
-      const matchesStatus =
-        statusFilter === 'all' ? true : trip.status === statusFilter;
-
-      const matchesTripType =
-        tripTypeFilter === 'all'
-          ? true
-          : tripTypeFilter === 'groupage'
-            ? trip.is_groupage
-            : !trip.is_groupage;
-
-      const createdByNameRaw =
-        `${trip.created_by_user?.first_name || ''} ${trip.created_by_user?.last_name || ''}`.trim();
-      const createdByName = createdByNameRaw.toLowerCase();
-
-      const createdByQuery = createdByFilter.trim().toLowerCase();
-      const selectedCreatedByQuery = selectedCreatedBy.trim().toLowerCase();
-
-      const matchesCreatedBy = selectedCreatedByQuery
-        ? createdByName === selectedCreatedByQuery
-        : !createdByQuery || createdByName.includes(createdByQuery);
-
-        const tripCreatedDate = trip.created_at ? new Date(trip.created_at) : null;
-
-const matchesCreatedFrom =
-  !createdFrom ||
-  (tripCreatedDate &&
-    tripCreatedDate >= new Date(`${createdFrom}T00:00:00`));
-
-const matchesCreatedTo =
-  !createdTo ||
-  (tripCreatedDate &&
-    tripCreatedDate <= new Date(`${createdTo}T23:59:59`));
-
+      const createdBy = formatPerson(trip.created_by_user);
+      const linkedManager = trip.linked_manager?.name || '';
+      const carrierName = trip.carrier?.name || '';
+      const carrierCode = trip.carrier?.company_code || '';
+      const priceText =
+        trip.can_view_financials &&
+        trip.price !== null &&
+        trip.price !== undefined
+          ? `${trip.price} EUR`
+          : '';
+      const truckTrailerText =
+        [trip.truck_plate, trip.trailer_plate].filter(Boolean).join(' / ') || '';
       const searchableText = [
-        trip.trip_number || '',
+        formatStatusLabel(trip.status),
+        trip.trip_number,
+        carrierName,
+        carrierCode,
+        trip.display_type,
         trip.driver_name || '',
-        trip.truck_plate || '',
-        trip.trailer_plate || '',
-        trip.carrier?.name || '',
-        trip.carrier?.company_code || '',
+        truckTrailerText,
+        priceText,
+        linkedManager,
+        createdBy,
+        trip.created_at ? new Date(trip.created_at).toLocaleString() : '',
       ]
         .join(' ')
         .toLowerCase();
 
-      const matchesSearch = !q || searchableText.includes(q);
+      const matchesGlobalSearch =
+        !globalSearch || searchableText.includes(globalSearch);
+
+      const matchesStatus =
+        filters.status === 'all' ? true : trip.status === filters.status;
+      const matchesTrip = matchesText(trip.trip_number, filters.trip);
+      const matchesCarrier =
+        matchesText(carrierName, filters.carrier) ||
+        matchesText(carrierCode, filters.carrier);
+      const matchesType =
+        filters.type === 'all'
+          ? true
+          : trip.display_type.toLowerCase() === filters.type.toLowerCase();
+      const matchesDriver = matchesText(trip.driver_name, filters.driver);
+      const matchesTruckTrailer = matchesText(
+        truckTrailerText,
+        filters.truckTrailer
+      );
+      const matchesPrice = matchesText(priceText, filters.price);
+      const matchesLinked = matchesText(linkedManager, filters.linked);
+      const matchesCreatedBy = matchesText(createdBy, filters.createdBy);
+
+      const createdDate = trip.created_at ? new Date(trip.created_at) : null;
+      const matchesCreatedFrom =
+        !filters.createdFrom ||
+        (createdDate &&
+          createdDate >= new Date(`${filters.createdFrom}T00:00:00`));
+      const matchesCreatedTo =
+        !filters.createdTo ||
+        (createdDate &&
+          createdDate <= new Date(`${filters.createdTo}T23:59:59`));
 
       return (
+        matchesGlobalSearch &&
         matchesStatus &&
-        matchesTripType &&
+        matchesTrip &&
+        matchesCarrier &&
+        matchesType &&
+        matchesDriver &&
+        matchesTruckTrailer &&
+        matchesPrice &&
+        matchesLinked &&
         matchesCreatedBy &&
         matchesCreatedFrom &&
-        matchesCreatedTo &&
-        matchesSearch
+        matchesCreatedTo
       );
     });
-  }, [trips, search, statusFilter, createdByFilter, selectedCreatedBy, tripTypeFilter, createdFrom, createdTo]);
+  }, [filters, trips]);
 
-  const totalPages = Math.max(1, Math.ceil(filteredTrips.length / rowsPerPage));
+  const totalPages = Math.max(1, Math.ceil(filteredTrips.length / filters.rowsPerPage));
   const safeCurrentPage = Math.min(currentPage, totalPages);
 
   const paginatedTrips = filteredTrips.slice(
-    (safeCurrentPage - 1) * rowsPerPage,
-    safeCurrentPage * rowsPerPage
+    (safeCurrentPage - 1) * filters.rowsPerPage,
+    safeCurrentPage * filters.rowsPerPage
   );
 
-  const getStatusLabel = (status: TripRow['status']) => {
-    if (status === 'unconfirmed') return 'Unconfirmed';
-    if (status === 'confirmed') return 'Confirmed';
-    if (status === 'completed') return 'Completed';
-    return status;
+  const updateFilter = <K extends keyof TripsFilters>(
+    key: K,
+    value: TripsFilters[K]
+  ) => {
+    setFilters((prev) => ({
+      ...prev,
+      [key]: value,
+    }));
   };
 
-  const getStatusBadgeClass = (status: TripRow['status']) => {
-    if (status === 'unconfirmed') {
-      return 'bg-yellow-100 text-yellow-800';
-    }
-    if (status === 'confirmed') {
-      return 'bg-blue-100 text-blue-800';
-    }
-    return 'bg-green-100 text-green-800';
+  const resetFilters = () => {
+    setFilters(DEFAULT_FILTERS);
+    setCurrentPage(1);
+    setActiveHeaderFilter(null);
   };
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-3xl font-bold">Trips</h1>
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
+        <div />
+
+        <div className="text-center">
+          <h1 className="text-3xl font-bold">Trips</h1>
+        </div>
 
         <button
           onClick={() => router.push('/app/trips/new')}
-          className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-white hover:bg-slate-800"
+          className="justify-self-end inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-white hover:bg-slate-800"
         >
           <Plus size={16} />
           Add Trip
@@ -263,176 +379,296 @@ const matchesCreatedTo =
       </div>
 
       <div className="rounded-2xl border bg-white p-4">
-      <div className="grid grid-cols-1 md:grid-cols-7 gap-4 items-start">
+        <div className="flex flex-col items-center justify-center gap-3 md:flex-row">
           <input
-            placeholder="Search by trip number, carrier, driver, plate..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full border rounded-md px-3 py-2"
+            placeholder="Search..."
+            value={filters.search}
+            onChange={(e) => updateFilter('search', e.target.value)}
+            className="w-full max-w-xs rounded-md border px-3 py-2"
           />
 
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="w-full border rounded-md px-3 py-2"
+          <button
+            type="button"
+            onClick={resetFilters}
+            className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm hover:bg-slate-50"
           >
-            <option value="all">All statuses</option>
-            <option value="unconfirmed">Unconfirmed</option>
-            <option value="confirmed">Confirmed</option>
-            <option value="completed">Completed</option>
-          </select>
-
-          <div className="relative">
-            <input
-              placeholder="Search by creator..."
-              value={createdByFilter}
-              onChange={(e) => {
-                setCreatedByFilter(e.target.value);
-                setSelectedCreatedBy('');
-              }}
-              className="w-full border rounded-md px-3 py-2"
-            />
-
-{createdByFilter.trim() !== '' && selectedCreatedBy !== createdByFilter && (
-              <div className="absolute left-0 right-0 top-full mt-1 z-20 border rounded-md bg-white max-h-56 overflow-y-auto shadow-lg">
-                {filteredCreatedByOptions.length === 0 ? (
-                  <div className="px-3 py-2 text-sm text-slate-500">No creators found</div>
-                ) : (
-                  filteredCreatedByOptions.map((name) => (
-<button
-  key={name}
-  type="button"
-  onMouseDown={(e) => e.preventDefault()}
-  onClick={() => {
-    setCreatedByFilter(name);
-    setSelectedCreatedBy(name);
-  }}
-  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 border-b last:border-b-0"
->
-  {name}
-</button>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-
-          <select
-            value={tripTypeFilter}
-            onChange={(e) => setTripTypeFilter(e.target.value)}
-            className="w-full border rounded-md px-3 py-2"
-          >
-            <option value="all">All types</option>
-            <option value="groupage">Groupage</option>
-            <option value="regular">Regular</option>
-          </select>
-
-          <input
-      type="date"
-      value={createdFrom}
-      onChange={(e) => setCreatedFrom(e.target.value)}
-      className="w-full border rounded-md px-3 py-2"
-      title="Created from"
-    />
-
-    <input
-      type="date"
-      value={createdTo}
-      onChange={(e) => setCreatedTo(e.target.value)}
-      className="w-full border rounded-md px-3 py-2"
-      title="Created to"
-    />
-
-<button
-  type="button"
-  onClick={() => {
-    setSearch('');
-    setStatusFilter('all');
-    setCreatedByFilter('');
-    setSelectedCreatedBy('');
-    setTripTypeFilter('all');
-    setCreatedFrom('');
-    setCreatedTo('');
-    setRowsPerPage(20);
-    setCurrentPage(1);
-  }}
-  className="w-full border rounded-md px-3 py-2 text-sm hover:bg-slate-50"
->
-  Reset filters
-</button>
-
+            Reset filters
+          </button>
         </div>
       </div>
 
       <div className="rounded-2xl border bg-white overflow-hidden">
-        {loading ? (
+        {loading && !filtersHydrated ? (
           <div className="p-10 flex justify-center">
             <Loader2 className="h-8 w-8 animate-spin" />
           </div>
-        ) : filteredTrips.length === 0 ? (
-          <div className="p-10 text-center text-slate-500">No trips found</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
+            <table className="min-w-[1200px] w-full text-sm">
               <thead className="bg-slate-50 border-b">
                 <tr>
-                  <th className="text-left px-4 py-3 font-semibold">Trip No.</th>
-                  <th className="text-left px-4 py-3 font-semibold">Status</th>
-                  <th className="text-left px-4 py-3 font-semibold">Carrier</th>
-                  <th className="text-left px-4 py-3 font-semibold">Driver</th>
-                  <th className="text-left px-4 py-3 font-semibold">Truck / Trailer</th>
-                  <th className="text-left px-4 py-3 font-semibold">Price</th>
-                  <th className="text-left px-4 py-3 font-semibold">Payment term</th>
-                  <th className="text-left px-4 py-3 font-semibold">Created</th>
+                  <th className="px-2 py-2 text-left align-top" data-trip-header-filter-root="true">
+                    <div className="relative">
+                      <HeaderFilterButton
+                        label="Status"
+                        active={activeHeaderFilter === 'status'}
+                        onClick={() =>
+                          setActiveHeaderFilter((prev) => (prev === 'status' ? null : 'status'))
+                        }
+                      />
+                      {activeHeaderFilter === 'status' ? (
+                        <div className="absolute left-0 top-full z-20 mt-2 w-44 rounded-xl border bg-white p-2 shadow-lg">
+                          <select
+                            value={filters.status}
+                            onChange={(e) => updateFilter('status', e.target.value)}
+                            className="w-full rounded-md border px-2 py-2 text-sm"
+                          >
+                            <option value="all">All statuses</option>
+                            <option value="unconfirmed">Unconfirmed</option>
+                            <option value="confirmed">Confirmed</option>
+                            <option value="active">Active</option>
+                            <option value="completed">Completed</option>
+                          </select>
+                        </div>
+                      ) : null}
+                    </div>
+                  </th>
+                  <th className="px-2 py-2 text-left align-top" data-trip-header-filter-root="true">
+                    <div className="relative">
+                      <HeaderFilterButton
+                        label="Trip"
+                        active={activeHeaderFilter === 'trip'}
+                        onClick={() =>
+                          setActiveHeaderFilter((prev) => (prev === 'trip' ? null : 'trip'))
+                        }
+                      />
+                      {activeHeaderFilter === 'trip' ? (
+                        <div className="absolute left-0 top-full z-20 mt-2 w-44 rounded-xl border bg-white p-2 shadow-lg">
+                          <input
+                            value={filters.trip}
+                            onChange={(e) => updateFilter('trip', e.target.value)}
+                            placeholder="Trip no."
+                            className="w-full rounded-md border px-2 py-2 text-sm"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  </th>
+                  <th className="px-2 py-2 text-left align-top" data-trip-header-filter-root="true">
+                    <div className="relative">
+                      <HeaderFilterButton
+                        label="Carrier"
+                        active={activeHeaderFilter === 'carrier'}
+                        onClick={() =>
+                          setActiveHeaderFilter((prev) => (prev === 'carrier' ? null : 'carrier'))
+                        }
+                      />
+                      {activeHeaderFilter === 'carrier' ? (
+                        <div className="absolute left-0 top-full z-20 mt-2 w-52 rounded-xl border bg-white p-2 shadow-lg">
+                          <input
+                            value={filters.carrier}
+                            onChange={(e) => updateFilter('carrier', e.target.value)}
+                            placeholder="Carrier name or code"
+                            className="w-full rounded-md border px-2 py-2 text-sm"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  </th>
+                  <th className="px-2 py-2 text-left align-top" data-trip-header-filter-root="true">
+                    <div className="relative">
+                      <HeaderFilterButton
+                        label="Type"
+                        active={activeHeaderFilter === 'type'}
+                        onClick={() =>
+                          setActiveHeaderFilter((prev) => (prev === 'type' ? null : 'type'))
+                        }
+                      />
+                      {activeHeaderFilter === 'type' ? (
+                        <div className="absolute left-0 top-full z-20 mt-2 w-40 rounded-xl border bg-white p-2 shadow-lg">
+                          <select
+                            value={filters.type}
+                            onChange={(e) => updateFilter('type', e.target.value)}
+                            className="w-full rounded-md border px-2 py-2 text-sm"
+                          >
+                            <option value="all">All</option>
+                            <option value="Groupage">Groupage</option>
+                            <option value="Regular">Regular</option>
+                          </select>
+                        </div>
+                      ) : null}
+                    </div>
+                  </th>
+                  <th className="px-2 py-2 text-left align-top" data-trip-header-filter-root="true">
+                    <div className="relative">
+                      <HeaderFilterButton
+                        label="Driver"
+                        active={activeHeaderFilter === 'driver'}
+                        onClick={() =>
+                          setActiveHeaderFilter((prev) => (prev === 'driver' ? null : 'driver'))
+                        }
+                      />
+                      {activeHeaderFilter === 'driver' ? (
+                        <div className="absolute left-0 top-full z-20 mt-2 w-44 rounded-xl border bg-white p-2 shadow-lg">
+                          <input
+                            value={filters.driver}
+                            onChange={(e) => updateFilter('driver', e.target.value)}
+                            placeholder="Driver"
+                            className="w-full rounded-md border px-2 py-2 text-sm"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  </th>
+                  <th className="px-2 py-2 text-left align-top" data-trip-header-filter-root="true">
+                    <div className="relative">
+                      <HeaderFilterButton
+                        label="Truck / Trailer"
+                        active={activeHeaderFilter === 'truck_trailer'}
+                        onClick={() =>
+                          setActiveHeaderFilter((prev) =>
+                            prev === 'truck_trailer' ? null : 'truck_trailer'
+                          )
+                        }
+                      />
+                      {activeHeaderFilter === 'truck_trailer' ? (
+                        <div className="absolute left-0 top-full z-20 mt-2 w-48 rounded-xl border bg-white p-2 shadow-lg">
+                          <input
+                            value={filters.truckTrailer}
+                            onChange={(e) => updateFilter('truckTrailer', e.target.value)}
+                            placeholder="Truck or trailer"
+                            className="w-full rounded-md border px-2 py-2 text-sm"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  </th>
+                  <th className="px-2 py-2 text-left align-top" data-trip-header-filter-root="true">
+                    <div className="relative">
+                      <HeaderFilterButton
+                        label="Price"
+                        active={activeHeaderFilter === 'price'}
+                        onClick={() =>
+                          setActiveHeaderFilter((prev) => (prev === 'price' ? null : 'price'))
+                        }
+                      />
+                      {activeHeaderFilter === 'price' ? (
+                        <div className="absolute left-0 top-full z-20 mt-2 w-40 rounded-xl border bg-white p-2 shadow-lg">
+                          <input
+                            value={filters.price}
+                            onChange={(e) => updateFilter('price', e.target.value)}
+                            placeholder="Price"
+                            className="w-full rounded-md border px-2 py-2 text-sm"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  </th>
+                  <th className="px-2 py-2 text-left align-top" data-trip-header-filter-root="true">
+                    <div className="relative">
+                      <HeaderFilterButton
+                        label="Linked"
+                        active={activeHeaderFilter === 'linked'}
+                        onClick={() =>
+                          setActiveHeaderFilter((prev) => (prev === 'linked' ? null : 'linked'))
+                        }
+                      />
+                      {activeHeaderFilter === 'linked' ? (
+                        <div className="absolute left-0 top-full z-20 mt-2 w-48 rounded-xl border bg-white p-2 shadow-lg">
+                          <input
+                            value={filters.linked}
+                            onChange={(e) => updateFilter('linked', e.target.value)}
+                            placeholder="Linked manager"
+                            className="w-full rounded-md border px-2 py-2 text-sm"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  </th>
+                  <th className="px-2 py-2 text-left align-top" data-trip-header-filter-root="true">
+                    <div className="relative">
+                      <HeaderFilterButton
+                        label="Created"
+                        active={activeHeaderFilter === 'created'}
+                        onClick={() =>
+                          setActiveHeaderFilter((prev) => (prev === 'created' ? null : 'created'))
+                        }
+                      />
+                      {activeHeaderFilter === 'created' ? (
+                        <div className="absolute right-0 top-full z-20 mt-2 w-60 rounded-xl border bg-white p-2 shadow-lg space-y-2">
+                          <input
+                            value={filters.createdBy}
+                            onChange={(e) => updateFilter('createdBy', e.target.value)}
+                            placeholder="Creator"
+                            className="w-full rounded-md border px-2 py-2 text-sm"
+                          />
+                          <input
+                            type="date"
+                            value={filters.createdFrom}
+                            onChange={(e) => updateFilter('createdFrom', e.target.value)}
+                            className="w-full rounded-md border px-2 py-2 text-sm"
+                          />
+                          <input
+                            type="date"
+                            value={filters.createdTo}
+                            onChange={(e) => updateFilter('createdTo', e.target.value)}
+                            className="w-full rounded-md border px-2 py-2 text-sm"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {paginatedTrips.map((trip) => (
-                  <tr
-                    key={trip.id}
-                    onClick={() => router.push(`/app/trips/${trip.id}`)}
-                    className="border-b hover:bg-slate-50 cursor-pointer"
-                  >
-                    <td className="px-4 py-3 font-medium">{trip.trip_number}</td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={`inline-flex rounded-md px-2 py-1 text-xs font-medium ${getStatusBadgeClass(
-                          trip.status
-                        )}`}
-                      >
-                        {getStatusLabel(trip.status)}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      {trip.carrier?.name || '-'}
-                      {trip.carrier?.company_code ? ` (${trip.carrier.company_code})` : ''}
-                    </td>
-                    <td className="px-4 py-3">{trip.driver_name || '-'}</td>
-                    <td className="px-4 py-3">
-                      {[trip.truck_plate, trip.trailer_plate].filter(Boolean).join(' / ') || '-'}
-                    </td>
-                    <td className="px-4 py-3">
-                      {trip.price !== null && trip.price !== undefined ? `${trip.price} €` : '-'}
-                    </td>
-                    <td className="px-4 py-3">
-                      {trip.payment_term_days !== null && trip.payment_term_days !== undefined
-                        ? `${trip.payment_term_days} d.`
-                        : '-'}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div>
-                        <div>
-                          {trip.created_at ? new Date(trip.created_at).toLocaleString() : '-'}
-                        </div>
-                        <div className="text-xs text-slate-500">
-                          {trip.created_by_user?.first_name || trip.created_by_user?.last_name
-                            ? `${trip.created_by_user?.first_name || ''} ${trip.created_by_user?.last_name || ''}`.trim()
-                            : '-'}
-                        </div>
-                      </div>
+                {filteredTrips.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
+                      No trips found
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  paginatedTrips.map((trip) => (
+                    <tr
+                      key={trip.id}
+                      onClick={() => router.push(`/app/trips/${trip.id}`)}
+                      className="cursor-pointer border-b hover:bg-slate-50"
+                    >
+                      <td className="px-2 py-2">
+                        <span
+                          className={`inline-flex rounded-md px-2 py-1 text-xs font-medium ${getStatusBadgeClass(
+                            trip.status
+                          )}`}
+                        >
+                          {formatStatusLabel(trip.status)}
+                        </span>
+                      </td>
+                      <td className="px-2 py-2 font-medium">{trip.trip_number}</td>
+                      <td className="px-2 py-2">{formatShortCompanyName(trip.carrier?.name)}</td>
+                      <td className="px-2 py-2">{trip.display_type}</td>
+                      <td className="px-2 py-2">{trip.driver_name || '-'}</td>
+                      <td className="px-2 py-2">
+                        {[trip.truck_plate, trip.trailer_plate].filter(Boolean).join(' / ') || '-'}
+                      </td>
+                      <td className="px-2 py-2">
+                        {trip.can_view_financials &&
+                        trip.price !== null &&
+                        trip.price !== undefined
+                          ? `${trip.price} EUR`
+                          : <span className="text-slate-400">-</span>}
+                      </td>
+                      <td className="px-2 py-2">{trip.linked_manager?.name || '-'}</td>
+                      <td className="px-2 py-2">
+                        <div className="whitespace-nowrap">
+                          <div>{trip.created_at ? new Date(trip.created_at).toLocaleDateString() : '-'}</div>
+                          <div className="text-xs text-slate-500">
+                            {formatPerson(trip.created_by_user)}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -440,13 +676,15 @@ const matchesCreatedTo =
       </div>
 
       <div className="pt-4">
-        <div className="flex justify-center items-center gap-8">
+        <div className="flex flex-wrap justify-center items-center gap-6">
           <div className="flex items-center gap-2">
             <span className="text-sm text-slate-600">Rows per page</span>
             <select
-              value={rowsPerPage}
-              onChange={(e) => setRowsPerPage(Number(e.target.value))}
-              className="border rounded-md px-3 py-2 text-sm"
+              value={filters.rowsPerPage}
+              onChange={(e) =>
+                updateFilter('rowsPerPage', Number(e.target.value) as 20 | 50 | 100)
+              }
+              className="rounded-md border px-3 py-2 text-sm"
             >
               <option value={20}>20</option>
               <option value={50}>50</option>
@@ -457,7 +695,7 @@ const matchesCreatedTo =
           <button
             onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
             disabled={safeCurrentPage === 1}
-            className="border rounded-md px-6 py-2 text-sm disabled:opacity-50"
+            className="rounded-md border px-6 py-2 text-sm disabled:opacity-50"
           >
             Prev
           </button>
@@ -467,7 +705,7 @@ const matchesCreatedTo =
           <button
             onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
             disabled={safeCurrentPage === totalPages}
-            className="border rounded-md px-6 py-2 text-sm disabled:opacity-50"
+            className="rounded-md border px-6 py-2 text-sm disabled:opacity-50"
           >
             Next
           </button>

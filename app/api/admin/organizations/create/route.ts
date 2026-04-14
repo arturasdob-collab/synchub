@@ -3,6 +3,16 @@ import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+const ALLOWED_ORGANIZATION_TYPES = ['company', 'partner', 'terminal', 'warehouse'] as const;
+
+function normalizeNullableString(value: unknown) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -53,9 +63,23 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const name = String(body?.name || '').trim();
+    const type = normalizeNullableString(body?.type);
+    const companyCode = normalizeNullableString(body?.company_code ?? body?.companyCode);
+    const vatCode = normalizeNullableString(body?.vat_code ?? body?.vatCode);
+    const address = normalizeNullableString(body?.address);
+    const city = normalizeNullableString(body?.city);
+    const postalCode = normalizeNullableString(body?.postal_code ?? body?.postalCode);
+    const country = normalizeNullableString(body?.country);
+    const contactPhone = normalizeNullableString(body?.contact_phone ?? body?.contactPhone);
+    const contactEmail = normalizeNullableString(body?.contact_email ?? body?.contactEmail);
+    const notes = normalizeNullableString(body?.notes);
 
     if (!name) {
       return NextResponse.json({ error: 'Organization name is required' }, { status: 400 });
+    }
+
+    if (type && !ALLOWED_ORGANIZATION_TYPES.includes(type as any)) {
+      return NextResponse.json({ error: 'Invalid organization type' }, { status: 400 });
     }
 
     const { data: existingOrg, error: existingErr } = await adminClient
@@ -88,6 +112,16 @@ export async function POST(req: NextRequest) {
       .from('organizations')
       .insert({
         name,
+        type,
+        company_code: companyCode,
+        vat_code: vatCode,
+        address,
+        city,
+        postal_code: postalCode,
+        country,
+        contact_phone: contactPhone,
+        contact_email: contactEmail,
+        notes,
       })
       .select('id, name')
       .single();

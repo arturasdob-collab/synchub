@@ -38,10 +38,40 @@ type UserRow = UserProfile & {
   organizations: { name: string } | null;
 };
 type RoleSelect = UserRole | 'SUPER_ADMIN';
+type UserStatusFilter = 'all' | 'active' | 'disabled' | 'pending';
+
+type UsersFilters = {
+  search: string;
+  manager: string;
+  email: string;
+  organization: string;
+  role: string;
+  status: UserStatusFilter;
+  joinedFrom: string;
+  joinedTo: string;
+};
+
+type HeaderFilterId =
+  | 'manager'
+  | 'email'
+  | 'organization'
+  | 'role'
+  | 'status'
+  | 'joined';
 
 const ROLE_OPTIONS: UserRole[] = ['OWNER', 'ADMIN', 'MANAGER', 'ACCOUNTANT', 'FINANCE'];
 const NON_ADMIN_ROLES: UserRole[] = ['MANAGER', 'ACCOUNTANT', 'FINANCE'];
 const ADMIN_ROLES: UserRole[] = ['OWNER', 'ADMIN'];
+const DEFAULT_FILTERS: UsersFilters = {
+  search: '',
+  manager: '',
+  email: '',
+  organization: '',
+  role: 'all',
+  status: 'all',
+  joinedFrom: '',
+  joinedTo: '',
+};
 
 function passwordRules(pw: string) {
   return {
@@ -53,12 +83,70 @@ function passwordRules(pw: string) {
   };
 }
 
+function matchesText(value: string | null | undefined, query: string) {
+  if (!query.trim()) {
+    return true;
+  }
+
+  return (value || '').toLowerCase().includes(query.trim().toLowerCase());
+}
+
+function getUserDisplayName(user: UserRow) {
+  return [user.first_name, user.last_name].filter(Boolean).join(' ').trim() || '-';
+}
+
+function getUserDisplayRole(user: Pick<UserRow, 'is_super_admin' | 'role'>) {
+  return user.is_super_admin ? 'SUPER_ADMIN' : String(user.role || '').toUpperCase();
+}
+
+function getUserStatus(user: UserRow) {
+  if (user.is_pending) {
+    return 'Pending confirmation';
+  }
+
+  if (user.disabled) {
+    return 'Disabled';
+  }
+
+  return 'Active';
+}
+
+function formatJoinedDate(value: string) {
+  return format(new Date(value), 'dd/MM/yyyy');
+}
+
+function HeaderFilterButton({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-left text-xs font-semibold ${
+        active ? 'bg-slate-200 text-slate-900' : 'text-slate-700 hover:bg-slate-100'
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
 export default function AdminUsersPage() {
   const router = useRouter();
   const { profile, loading: authLoading } = useAuth();
 
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [filtersHydrated, setFiltersHydrated] = useState(false);
+  const [filters, setFilters] = useState<UsersFilters>(DEFAULT_FILTERS);
+  const [activeHeaderFilter, setActiveHeaderFilter] =
+    useState<HeaderFilterId | null>(null);
   const [pendingChanges, setPendingChanges] = useState<Record<string, RoleSelect>>({});
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
   const [togglingUserId, setTogglingUserId] = useState<string | null>(null);
@@ -206,6 +294,68 @@ export default function AdminUsersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile]);
 
+  useEffect(() => {
+    if (!profile?.id) {
+      return;
+    }
+
+    try {
+      const saved = window.localStorage.getItem(
+        `synchub.admin-users.filters.${profile.id}`
+      );
+
+      if (!saved) {
+        setFiltersHydrated(true);
+        return;
+      }
+
+      const parsed = JSON.parse(saved) as Partial<UsersFilters>;
+      setFilters({
+        ...DEFAULT_FILTERS,
+        ...parsed,
+        status:
+          parsed.status === 'active' ||
+          parsed.status === 'disabled' ||
+          parsed.status === 'pending' ||
+          parsed.status === 'all'
+            ? parsed.status
+            : DEFAULT_FILTERS.status,
+      });
+    } catch (error) {
+      console.error('Failed to hydrate admin user filters:', error);
+      setFilters(DEFAULT_FILTERS);
+    } finally {
+      setFiltersHydrated(true);
+    }
+  }, [profile?.id]);
+
+  useEffect(() => {
+    if (!profile?.id || !filtersHydrated) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      `synchub.admin-users.filters.${profile.id}`,
+      JSON.stringify(filters)
+    );
+  }, [filters, filtersHydrated, profile?.id]);
+
+  useEffect(() => {
+    const handleOutsideClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+
+      if (!target?.closest('[data-admin-user-header-filter-root="true"]')) {
+        setActiveHeaderFilter(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleOutsideClick);
+
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+    };
+  }, []);
+
   const cleanupExpiredInvites = async () => {
     const CLEANUP_KEY = 'last_invite_cleanup';
     const lastCleanup = localStorage.getItem(CLEANUP_KEY);
@@ -299,6 +449,82 @@ export default function AdminUsersPage() {
     } catch (error) {
       console.error("Error fetching organizations:", error);
     }
+  };
+
+  const filteredUsers = useMemo(() => {
+    const globalSearch = filters.search.trim().toLowerCase();
+    const normalizedRoleFilter = String(filters.role || 'all').trim().toUpperCase();
+
+    return users.filter((user) => {
+      const managerName = getUserDisplayName(user);
+      const organizationName = (user as any).organizations?.name || '';
+      const displayRole = getUserDisplayRole(user);
+      const status = getUserStatus(user);
+      const joined = formatJoinedDate(user.created_at);
+      const searchableText = [
+        managerName,
+        user.email,
+        organizationName,
+        displayRole,
+        status,
+        joined,
+      ]
+        .join(' ')
+        .toLowerCase();
+
+      const matchesGlobalSearch =
+        !globalSearch || searchableText.includes(globalSearch);
+
+      const matchesManager = matchesText(managerName, filters.manager);
+      const matchesEmail = matchesText(user.email, filters.email);
+      const matchesOrganization = matchesText(organizationName, filters.organization);
+      const matchesRole =
+        normalizedRoleFilter === 'ALL'
+          ? true
+          : displayRole === normalizedRoleFilter;
+      const matchesStatus =
+        filters.status === 'all'
+          ? true
+          : filters.status === 'active'
+          ? status === 'Active'
+          : filters.status === 'disabled'
+          ? status === 'Disabled'
+          : status === 'Pending confirmation';
+
+      const createdDate = new Date(user.created_at);
+      const matchesJoinedFrom =
+        !filters.joinedFrom ||
+        createdDate >= new Date(`${filters.joinedFrom}T00:00:00`);
+      const matchesJoinedTo =
+        !filters.joinedTo ||
+        createdDate <= new Date(`${filters.joinedTo}T23:59:59`);
+
+      return (
+        matchesGlobalSearch &&
+        matchesManager &&
+        matchesEmail &&
+        matchesOrganization &&
+        matchesRole &&
+        matchesStatus &&
+        matchesJoinedFrom &&
+        matchesJoinedTo
+      );
+    });
+  }, [filters, users]);
+
+  const updateFilter = <K extends keyof UsersFilters>(
+    key: K,
+    value: UsersFilters[K]
+  ) => {
+    setFilters((prev) => ({
+      ...prev,
+      [key]: value,
+    }));
+  };
+
+  const resetFilters = () => {
+    setFilters(DEFAULT_FILTERS);
+    setActiveHeaderFilter(null);
   };
 
   const handleRoleChange = (user: UserProfile, newRole: RoleSelect) => {
@@ -838,21 +1064,15 @@ export default function AdminUsersPage() {
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-slate-900">User Management</h1>
-        <p className="text-slate-600 mt-2">Manage user accounts and permissions</p>
-      </div>
-  
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <CardTitle>All Users</CardTitle>
-              <CardDescription>View and manage user roles across the organization</CardDescription>
-            </div>
-  
-            <div className="flex items-center gap-2">
+    <div className="max-w-7xl mx-auto space-y-6 p-6">
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
+        <div />
+
+        <div className="text-center">
+          <h1 className="text-3xl font-bold text-slate-900">Manage Users</h1>
+        </div>
+
+        <div className="justify-self-end hidden">
               {/* CREATE USER */}
               <Dialog
                 open={createOpen}
@@ -1133,12 +1353,35 @@ export default function AdminUsersPage() {
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
-            </div>
-          </div>
-        </CardHeader>
+        </div>
+      </div>
 
-        <CardContent>
-          {loading ? (
+      <Card>
+        <CardContent className="space-y-4 pt-6">
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <Input
+              placeholder="Search..."
+              value={filters.search}
+              onChange={(e) => updateFilter('search', e.target.value)}
+              className="w-full max-w-xs"
+            />
+
+            <Button variant="outline" onClick={resetFilters}>
+              Reset filters
+            </Button>
+
+            <Button variant="outline" onClick={() => setCreateOpen(true)}>
+              <UserCog className="h-4 w-4 mr-2" />
+              Add User
+            </Button>
+
+            <Button onClick={() => setInviteModalOpen(true)}>
+              <UserPlus className="h-4 w-4 mr-2" />
+              Invite User
+            </Button>
+          </div>
+
+          {loading && !filtersHydrated ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
             </div>
@@ -1149,21 +1392,171 @@ export default function AdminUsersPage() {
               <p className="text-slate-600">User data will appear here</p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto rounded-xl border">
               <Table>
-                <TableHeader>
+                <TableHeader className="bg-slate-50">
                   <TableRow>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Organization</TableHead>
-                    <TableHead>Role</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Joined</TableHead>
+                    <TableHead data-admin-user-header-filter-root="true">
+                      <div className="relative">
+                        <HeaderFilterButton
+                          label="Manager"
+                          active={activeHeaderFilter === 'manager'}
+                          onClick={() =>
+                            setActiveHeaderFilter((prev) =>
+                              prev === 'manager' ? null : 'manager'
+                            )
+                          }
+                        />
+                        {activeHeaderFilter === 'manager' ? (
+                          <div className="absolute left-0 top-full z-20 mt-2 w-48 rounded-xl border bg-white p-2 shadow-lg">
+                            <Input
+                              value={filters.manager}
+                              onChange={(e) => updateFilter('manager', e.target.value)}
+                              placeholder="Manager"
+                            />
+                          </div>
+                        ) : null}
+                      </div>
+                    </TableHead>
+                    <TableHead data-admin-user-header-filter-root="true">
+                      <div className="relative">
+                        <HeaderFilterButton
+                          label="Email"
+                          active={activeHeaderFilter === 'email'}
+                          onClick={() =>
+                            setActiveHeaderFilter((prev) => (prev === 'email' ? null : 'email'))
+                          }
+                        />
+                        {activeHeaderFilter === 'email' ? (
+                          <div className="absolute left-0 top-full z-20 mt-2 w-56 rounded-xl border bg-white p-2 shadow-lg">
+                            <Input
+                              value={filters.email}
+                              onChange={(e) => updateFilter('email', e.target.value)}
+                              placeholder="Email"
+                            />
+                          </div>
+                        ) : null}
+                      </div>
+                    </TableHead>
+                    <TableHead data-admin-user-header-filter-root="true">
+                      <div className="relative">
+                        <HeaderFilterButton
+                          label="Organization"
+                          active={activeHeaderFilter === 'organization'}
+                          onClick={() =>
+                            setActiveHeaderFilter((prev) =>
+                              prev === 'organization' ? null : 'organization'
+                            )
+                          }
+                        />
+                        {activeHeaderFilter === 'organization' ? (
+                          <div className="absolute left-0 top-full z-20 mt-2 w-52 rounded-xl border bg-white p-2 shadow-lg">
+                            <Input
+                              value={filters.organization}
+                              onChange={(e) => updateFilter('organization', e.target.value)}
+                              placeholder="Organization"
+                            />
+                          </div>
+                        ) : null}
+                      </div>
+                    </TableHead>
+                    <TableHead data-admin-user-header-filter-root="true">
+                      <div className="relative">
+                        <HeaderFilterButton
+                          label="Role"
+                          active={activeHeaderFilter === 'role'}
+                          onClick={() =>
+                            setActiveHeaderFilter((prev) => (prev === 'role' ? null : 'role'))
+                          }
+                        />
+                        {activeHeaderFilter === 'role' ? (
+                          <div className="absolute left-0 top-full z-20 mt-2 w-44 rounded-xl border bg-white p-2 shadow-lg">
+                            <select
+                              value={filters.role}
+                              onChange={(e) => updateFilter('role', e.target.value)}
+                              className="w-full rounded-md border px-2 py-2 text-sm"
+                            >
+                              <option value="all">All roles</option>
+                              <option value="SUPER_ADMIN">SUPER_ADMIN</option>
+                              {ROLE_OPTIONS.map((role) => (
+                                <option key={role} value={role}>
+                                  {role}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        ) : null}
+                      </div>
+                    </TableHead>
+                    <TableHead data-admin-user-header-filter-root="true">
+                      <div className="relative">
+                        <HeaderFilterButton
+                          label="Status"
+                          active={activeHeaderFilter === 'status'}
+                          onClick={() =>
+                            setActiveHeaderFilter((prev) => (prev === 'status' ? null : 'status'))
+                          }
+                        />
+                        {activeHeaderFilter === 'status' ? (
+                          <div className="absolute left-0 top-full z-20 mt-2 w-48 rounded-xl border bg-white p-2 shadow-lg">
+                            <Select
+                              value={filters.status}
+                              onValueChange={(value) =>
+                                updateFilter('status', value as UsersFilters['status'])
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="All statuses" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="all">All statuses</SelectItem>
+                                <SelectItem value="active">Active</SelectItem>
+                                <SelectItem value="disabled">Disabled</SelectItem>
+                                <SelectItem value="pending">Pending confirmation</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        ) : null}
+                      </div>
+                    </TableHead>
+                    <TableHead data-admin-user-header-filter-root="true">
+                      <div className="relative">
+                        <HeaderFilterButton
+                          label="Joined"
+                          active={activeHeaderFilter === 'joined'}
+                          onClick={() =>
+                            setActiveHeaderFilter((prev) => (prev === 'joined' ? null : 'joined'))
+                          }
+                        />
+                        {activeHeaderFilter === 'joined' ? (
+                          <div className="absolute right-0 top-full z-20 mt-2 w-52 space-y-2 rounded-xl border bg-white p-2 shadow-lg">
+                            <Input
+                              type="date"
+                              value={filters.joinedFrom}
+                              onChange={(e) => updateFilter('joinedFrom', e.target.value)}
+                            />
+                            <Input
+                              type="date"
+                              value={filters.joinedTo}
+                              onChange={(e) => updateFilter('joinedTo', e.target.value)}
+                            />
+                          </div>
+                        ) : null}
+                      </div>
+                    </TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
 
                 <TableBody>
-                  {users.map((user) => {
+                  {filteredUsers.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={7} className="py-10 text-center text-slate-500">
+                        No users found
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                  filteredUsers.map((user) => {
                     const hasPendingChange = pendingChanges[user.id] !== undefined;
                     const isSaving = savingUserId === user.id;
                     const isToggling = togglingUserId === user.id;
@@ -1180,14 +1573,17 @@ export default function AdminUsersPage() {
 
                     return (
                       <TableRow key={user.id} className={user.disabled ? 'opacity-60' : ''}>
-                        {/* EMAIL */}
+                        {/* MANAGER */}
                         <TableCell className="font-medium">
   <div className="flex items-start justify-between gap-2">
     <div>
-      <div className="font-medium text-slate-900">
+      <div
+        className="font-medium text-slate-900 cursor-pointer hover:text-slate-600"
+        onClick={() => router.push(`/app/admin/users/${user.id}`)}
+      >
         {[user.first_name, user.last_name].filter(Boolean).join(' ') || '—'}
       </div>
-      <div className="text-sm text-slate-500">
+      <div className="hidden text-sm text-slate-500">
         {user.email}
       </div>
     </div>
@@ -1210,6 +1606,9 @@ export default function AdminUsersPage() {
     </div>
   </div>
 </TableCell>
+
+                        {/* EMAIL */}
+                        <TableCell>{user.email}</TableCell>
 
                         {/* ORGANIZATION */}
                         <TableCell>{(user as any).organizations?.name || '—'}</TableCell>
@@ -1276,9 +1675,7 @@ export default function AdminUsersPage() {
 
                         {/* JOINED */}
                         <TableCell>
-  {user.is_pending
-    ? 'Invitation sent'
-    : format(new Date(user.created_at), 'MMM d, yyyy')}
+  {formatJoinedDate(user.created_at)}
 </TableCell>
 
                         {/* ACTIONS */}
@@ -1378,7 +1775,8 @@ export default function AdminUsersPage() {
                         </TableCell>
                       </TableRow>
                     );
-                  })}
+                  })
+                  )}
                 </TableBody>
               </Table>
             </div>

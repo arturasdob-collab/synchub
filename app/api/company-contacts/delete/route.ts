@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/auth-helpers-nextjs';
+import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 
 export async function POST(req: Request) {
@@ -19,6 +20,11 @@ export async function POST(req: Request) {
     }
   );
 
+  const serviceSupabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
@@ -31,10 +37,38 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Missing id' }, { status: 400 });
   }
 
-  const { error } = await supabase
+  const { data: profile } = await serviceSupabase
+    .from('user_profiles')
+    .select('organization_id')
+    .eq('id', user.id)
+    .single();
+
+  if (!profile?.organization_id) {
+    return NextResponse.json(
+      { error: 'User organization not found' },
+      { status: 400 }
+    );
+  }
+
+  const { data: contact } = await serviceSupabase
+    .from('company_contacts')
+    .select('id')
+    .eq('id', id)
+    .eq('organization_id', profile.organization_id)
+    .single();
+
+  if (!contact) {
+    return NextResponse.json(
+      { error: 'Contact not found in your organization' },
+      { status: 404 }
+    );
+  }
+
+  const { error } = await serviceSupabase
     .from('company_contacts')
     .delete()
-    .eq('id', id);
+    .eq('id', id)
+    .eq('organization_id', profile.organization_id);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });

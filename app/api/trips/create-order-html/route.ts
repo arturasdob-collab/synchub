@@ -13,6 +13,55 @@ function empty(value?: string | null) {
   return value && value.trim() !== '' ? value : '';
 }
 
+function safeText(value: string | number | null | undefined) {
+  return value === null || value === undefined ? '' : String(value).trim();
+}
+
+function formatTimeValue(value: string | null | undefined) {
+  const normalized = safeText(value);
+
+  if (!normalized) return '';
+
+  const match = normalized.match(/^(\d{1,2}:\d{2})/);
+  return match ? match[1] : normalized;
+}
+
+function joinParts(
+  parts: Array<string | number | null | undefined>,
+  separator = ', '
+) {
+  return parts
+    .map((part) => safeText(part))
+    .filter(Boolean)
+    .join(separator);
+}
+
+function joinLines(lines: Array<string | null | undefined>) {
+  return lines
+    .map((line) => safeText(line))
+    .filter(Boolean)
+    .join('\n');
+}
+
+function buildAlignedStopText(
+  lines: Array<string | number | null | undefined>
+) {
+  const normalized = lines.map((line) => safeText(line));
+  let lastNonEmptyIndex = -1;
+
+  normalized.forEach((line, index) => {
+    if (line !== '') {
+      lastNonEmptyIndex = index;
+    }
+  });
+
+  if (lastNonEmptyIndex === -1) {
+    return '';
+  }
+
+  return normalized.slice(0, lastNonEmptyIndex + 1).join('\n');
+}
+
 function esc(value: string) {
   return value
     .replace(/&/g, '&amp;')
@@ -124,8 +173,12 @@ export async function POST(req: Request) {
       id,
       trip_id,
       loading_date,
+      loading_time_from,
+      loading_time_to,
       loading_text,
       unloading_date,
+      unloading_time_from,
+      unloading_time_to,
       unloading_text,
       cargo_text,
       additional_conditions,
@@ -137,6 +190,150 @@ export async function POST(req: Request) {
     `)
     .eq('trip_id', tripId)
     .maybeSingle();
+
+  const { data: linkedOrderRows, error: linkedOrdersError } = await serviceSupabase
+    .from('order_trip_links')
+    .select(`
+      id,
+      linked_order:order_id (
+        id,
+        internal_order_number,
+        client_order_number,
+        loading_date,
+        loading_time_from,
+        loading_time_to,
+        loading_address,
+        loading_city,
+        loading_postal_code,
+        loading_country,
+        loading_contact,
+        loading_reference,
+        loading_customs_info,
+        unloading_date,
+        unloading_time_from,
+        unloading_time_to,
+        unloading_address,
+        unloading_city,
+        unloading_postal_code,
+        unloading_country,
+        unloading_contact,
+        unloading_reference,
+        unloading_customs_info,
+        shipper_name,
+        consignee_name,
+        cargo_kg,
+        cargo_quantity,
+        cargo_description,
+        cargo_ldm
+      )
+    `)
+    .eq('trip_id', tripId)
+    .eq('organization_id', profile.organization_id)
+    .order('created_at', { ascending: true });
+
+  if (linkedOrdersError) {
+    return NextResponse.json({ error: linkedOrdersError.message }, { status: 500 });
+  }
+
+  const linkedOrders = (linkedOrderRows || [])
+    .map((row: any) =>
+      Array.isArray(row.linked_order) ? row.linked_order[0] ?? null : row.linked_order
+    )
+    .filter(Boolean) as Array<{
+    id: string;
+    internal_order_number: string;
+    client_order_number: string | null;
+    loading_date: string | null;
+    loading_time_from: string | null;
+    loading_time_to: string | null;
+    loading_address: string | null;
+    loading_city: string | null;
+    loading_postal_code: string | null;
+    loading_country: string | null;
+    loading_contact: string | null;
+    loading_reference: string | null;
+    loading_customs_info: string | null;
+    unloading_date: string | null;
+    unloading_time_from: string | null;
+    unloading_time_to: string | null;
+    unloading_address: string | null;
+    unloading_city: string | null;
+    unloading_postal_code: string | null;
+    unloading_country: string | null;
+    unloading_contact: string | null;
+    unloading_reference: string | null;
+    unloading_customs_info: string | null;
+    shipper_name: string | null;
+    consignee_name: string | null;
+    cargo_kg: number | null;
+    cargo_quantity: string | null;
+    cargo_description: string | null;
+    cargo_ldm: number | null;
+  }>;
+
+  const prefillOrder = !draft?.id && linkedOrders.length === 1 ? linkedOrders[0] : null;
+
+  const prefilledLoadingDate = prefillOrder?.loading_date ?? '';
+  const prefilledLoadingTimeFrom = prefillOrder?.loading_time_from ?? '';
+  const prefilledLoadingTimeTo = prefillOrder?.loading_time_to ?? '';
+  const prefilledUnloadingDate = prefillOrder?.unloading_date ?? '';
+  const prefilledUnloadingTimeFrom = prefillOrder?.unloading_time_from ?? '';
+  const prefilledUnloadingTimeTo = prefillOrder?.unloading_time_to ?? '';
+  const prefilledCargoText = prefillOrder
+    ? joinLines([
+        prefillOrder.cargo_description,
+        joinParts(
+          [
+            prefillOrder.cargo_quantity
+              ? `Qty: ${prefillOrder.cargo_quantity}`
+              : null,
+            prefillOrder.cargo_kg !== null && prefillOrder.cargo_kg !== undefined
+              ? `KG: ${prefillOrder.cargo_kg}`
+              : null,
+            prefillOrder.cargo_ldm !== null && prefillOrder.cargo_ldm !== undefined
+              ? `LDM: ${prefillOrder.cargo_ldm}`
+              : null,
+          ],
+          ' / '
+        ),
+      ])
+    : '';
+  const prefilledLoadingText = prefillOrder
+    ? buildAlignedStopText([
+        '',
+        prefillOrder.shipper_name,
+        prefillOrder.loading_address,
+        joinParts(
+          [
+            prefillOrder.loading_postal_code,
+            prefillOrder.loading_city,
+            prefillOrder.loading_country,
+          ],
+          ', '
+        ),
+        prefillOrder.loading_contact,
+        prefillOrder.loading_customs_info,
+        prefillOrder.loading_reference,
+      ])
+    : '';
+  const prefilledUnloadingText = prefillOrder
+    ? buildAlignedStopText([
+        '',
+        prefillOrder.consignee_name,
+        prefillOrder.unloading_address,
+        joinParts(
+          [
+            prefillOrder.unloading_postal_code,
+            prefillOrder.unloading_city,
+            prefillOrder.unloading_country,
+          ],
+          ', '
+        ),
+        prefillOrder.unloading_contact,
+        prefillOrder.unloading_customs_info,
+        prefillOrder.unloading_reference,
+      ])
+    : '';
 
   const createdDate = trip.created_at
     ? new Date(trip.created_at).toLocaleDateString('en-GB')
@@ -165,6 +362,27 @@ export async function POST(req: Request) {
   const paymentSummary = `${paymentDays} days after receipt of complete and valid documents by email at INVOICES@TEMPUS.LT. Documents must be sent in PDF format. If originals are required by post, use the company details above.`;
 
   const representative = `${text(profile.first_name)} ${text(profile.last_name)}`.trim();
+  const loadingDateValue = draft?.id ? draft.loading_date ?? '' : prefilledLoadingDate;
+  const loadingTimeFromValue = draft?.id
+    ? formatTimeValue(draft.loading_time_from)
+    : formatTimeValue(prefilledLoadingTimeFrom);
+  const loadingTimeToValue = draft?.id
+    ? formatTimeValue(draft.loading_time_to)
+    : formatTimeValue(prefilledLoadingTimeTo);
+  const loadingTextValue = draft?.id ? draft.loading_text ?? '' : prefilledLoadingText;
+  const unloadingDateValue = draft?.id
+    ? draft.unloading_date ?? ''
+    : prefilledUnloadingDate;
+  const unloadingTimeFromValue = draft?.id
+    ? formatTimeValue(draft.unloading_time_from)
+    : formatTimeValue(prefilledUnloadingTimeFrom);
+  const unloadingTimeToValue = draft?.id
+    ? formatTimeValue(draft.unloading_time_to)
+    : formatTimeValue(prefilledUnloadingTimeTo);
+  const unloadingTextValue = draft?.id
+    ? draft.unloading_text ?? ''
+    : prefilledUnloadingText;
+  const cargoTextValue = draft?.id ? draft.cargo_text ?? '' : prefilledCargoText;
 
   const html = `
 <!doctype html>
@@ -289,7 +507,7 @@ export async function POST(req: Request) {
       display: block;
     }
 
-.fill-wrap {
+ .fill-wrap {
   border: 1px solid #222;
   display: grid;
   grid-template-columns: 130px 1fr;
@@ -309,7 +527,7 @@ export async function POST(req: Request) {
       margin-bottom: 7px;
     }
 
-.fill-write {
+ .fill-write {
   padding: 10px;
   box-sizing: border-box;
   white-space: pre-wrap;
@@ -332,6 +550,23 @@ export async function POST(req: Request) {
   height: 32px;
   margin-bottom: 8px;
   margin-top: 0;
+ }
+
+.date-time-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px 48px;
+  gap: 4px;
+  width: 100%;
+}
+
+.date-time-row .edit-input {
+  margin-bottom: 8px;
+}
+
+.date-time-row .edit-input:nth-child(n+2) {
+  padding-left: 4px;
+  padding-right: 4px;
+  text-align: center;
 }
 
 .edit-textarea {
@@ -481,7 +716,6 @@ export async function POST(req: Request) {
         <div class="fill-wrap">
           <div class="fill-labels">
             <div>Loading date:</div>
-            <div>Loading place:</div>
             <div>Shipper:</div>
             <div>Address:</div>
             <div>City, Country:</div>
@@ -490,8 +724,12 @@ export async function POST(req: Request) {
             <div>Reference:</div>
           </div>
           <div class="fill-write">
-            <input class="edit-input" id="loading_date" value="${esc(draft?.loading_date ?? '')}" />
-            <textarea class="edit-textarea" id="loading_text">${esc(draft?.loading_text ?? '')}</textarea>
+            <div class="date-time-row">
+              <input class="edit-input" id="loading_date" value="${esc(loadingDateValue)}" />
+              <input class="edit-input" id="loading_time_from" value="${esc(loadingTimeFromValue)}" placeholder="08:30" />
+              <input class="edit-input" id="loading_time_to" value="${esc(loadingTimeToValue)}" placeholder="16:30" />
+            </div>
+            <textarea class="edit-textarea" id="loading_text">${esc(loadingTextValue)}</textarea>
           </div>
         </div>
       </div>
@@ -501,7 +739,6 @@ export async function POST(req: Request) {
         <div class="fill-wrap">
           <div class="fill-labels">
             <div>Unloading date:</div>
-            <div>Unloading place:</div>
             <div>Consignee:</div>
             <div>Address:</div>
             <div>City, Country:</div>
@@ -510,8 +747,12 @@ export async function POST(req: Request) {
             <div>Reference:</div>
           </div>
           <div class="fill-write">
-            <input class="edit-input" id="unloading_date" value="${esc(draft?.unloading_date ?? '')}" />
-            <textarea class="edit-textarea" id="unloading_text">${esc(draft?.unloading_text ?? '')}</textarea>
+            <div class="date-time-row">
+              <input class="edit-input" id="unloading_date" value="${esc(unloadingDateValue)}" />
+              <input class="edit-input" id="unloading_time_from" value="${esc(unloadingTimeFromValue)}" placeholder="08:30" />
+              <input class="edit-input" id="unloading_time_to" value="${esc(unloadingTimeToValue)}" placeholder="16:30" />
+            </div>
+            <textarea class="edit-textarea" id="unloading_text">${esc(unloadingTextValue)}</textarea>
           </div>
         </div>
       </div>
@@ -521,7 +762,7 @@ export async function POST(req: Request) {
       <div>
         <div class="section-title">CARGO DETAILS</div>
         <div class="box cargo-box">
-          <textarea class="edit-textarea" id="cargo_text" style="min-height:56px;">${esc(draft?.cargo_text ?? '')}</textarea>
+          <textarea class="edit-textarea" id="cargo_text" style="min-height:56px;">${esc(cargoTextValue)}</textarea>
         </div>
 
         <div class="section-title" style="margin-top:8px;">VEHICLE INFORMATION</div>
@@ -601,19 +842,27 @@ Transport shall be carried out in accordance with applicable CMR requirements an
   <script>
     const tripId = ${JSON.stringify(tripId)};
     const initialDraftState = {
-  loading_date: ${JSON.stringify(draft?.loading_date ?? '')},
-  loading_text: ${JSON.stringify(draft?.loading_text ?? '')},
-  unloading_date: ${JSON.stringify(draft?.unloading_date ?? '')},
-  unloading_text: ${JSON.stringify(draft?.unloading_text ?? '')},
-  cargo_text: ${JSON.stringify(draft?.cargo_text ?? '')},
+  loading_date: ${JSON.stringify(loadingDateValue)},
+  loading_time_from: ${JSON.stringify(loadingTimeFromValue)},
+  loading_time_to: ${JSON.stringify(loadingTimeToValue)},
+  loading_text: ${JSON.stringify(loadingTextValue)},
+  unloading_date: ${JSON.stringify(unloadingDateValue)},
+  unloading_time_from: ${JSON.stringify(unloadingTimeFromValue)},
+  unloading_time_to: ${JSON.stringify(unloadingTimeToValue)},
+  unloading_text: ${JSON.stringify(unloadingTextValue)},
+  cargo_text: ${JSON.stringify(cargoTextValue)},
   additional_conditions: ${JSON.stringify(draft?.additional_conditions ?? '')},
   carrier_representative: ${JSON.stringify(draft?.carrier_representative ?? '')},
 };
 
 function cancelChanges() {
   document.getElementById('loading_date').value = initialDraftState.loading_date;
+  document.getElementById('loading_time_from').value = initialDraftState.loading_time_from;
+  document.getElementById('loading_time_to').value = initialDraftState.loading_time_to;
   document.getElementById('loading_text').value = initialDraftState.loading_text;
   document.getElementById('unloading_date').value = initialDraftState.unloading_date;
+  document.getElementById('unloading_time_from').value = initialDraftState.unloading_time_from;
+  document.getElementById('unloading_time_to').value = initialDraftState.unloading_time_to;
   document.getElementById('unloading_text').value = initialDraftState.unloading_text;
   document.getElementById('cargo_text').value = initialDraftState.cargo_text;
   document.getElementById('additional_conditions').value = initialDraftState.additional_conditions;
@@ -632,8 +881,12 @@ function cancelChanges() {
         const payload = {
           tripId,
           loading_date: document.getElementById('loading_date')?.value || '',
+          loading_time_from: document.getElementById('loading_time_from')?.value || '',
+          loading_time_to: document.getElementById('loading_time_to')?.value || '',
           loading_text: document.getElementById('loading_text')?.value || '',
           unloading_date: document.getElementById('unloading_date')?.value || '',
+          unloading_time_from: document.getElementById('unloading_time_from')?.value || '',
+          unloading_time_to: document.getElementById('unloading_time_to')?.value || '',
           unloading_text: document.getElementById('unloading_text')?.value || '',
           cargo_text: document.getElementById('cargo_text')?.value || '',
           additional_conditions: document.getElementById('additional_conditions')?.value || '',

@@ -68,14 +68,17 @@ function AppLayoutContent({ children }: { children: React.ReactNode }) {
   };
 
   const navigation = isPartnerOrg
-  ? [
-      { name: 'Dashboard', href: '/app', icon: LayoutDashboard },
-    ]
-  : [
-      { name: 'Dashboard', href: '/app', icon: LayoutDashboard },
-      { name: 'Companies', href: '/app/companies', icon: Building2 },
-      { name: 'Trips', href: '/app/trips', icon: Truck },
-    ];
+    ? [
+        { name: 'Dashboard', href: '/app', icon: LayoutDashboard },
+        { name: 'Orders', href: '/app/orders', icon: FileText },
+        { name: 'Trips', href: '/app/trips', icon: Truck },
+      ]
+    : [
+        { name: 'Dashboard', href: '/app', icon: LayoutDashboard },
+        { name: 'Companies', href: '/app/companies', icon: Building2 },
+        { name: 'Orders', href: '/app/orders', icon: FileText },
+        { name: 'Trips', href: '/app/trips', icon: Truck },
+      ];
 
 const canViewAuditLog =
   !!profile && ((profile as any).is_super_admin || (profile as any).is_creator);
@@ -156,7 +159,7 @@ const adminNavigation =
                 })}
               </div>
 
-              {isAdmin && (
+              {adminNavigation.length > 0 && (
                 <div>
                   <div className="px-4 mb-2">
                     <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-2">
@@ -242,11 +245,6 @@ const adminNavigation =
 
         <div className="flex-1 lg:ml-0">
           <div className="pt-16 lg:pt-0">
-            <div className="bg-yellow-100 border-b-2 border-yellow-400 px-4 py-2 text-center">
-              <p className="text-sm font-bold text-yellow-900">
-                BUILD MARK: 2026-03-01 AdminGuard v2
-              </p>
-            </div>
             <AdminGuard>{children}</AdminGuard>
           </div>
         </div>

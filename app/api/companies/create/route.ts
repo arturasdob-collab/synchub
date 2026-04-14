@@ -124,7 +124,7 @@ if (existingByCode && existingByCode.length > 0) {
   );
 }
 
-  const { error } = await serviceSupabase.from('companies').insert({
+  const { data, error } = await serviceSupabase.from('companies').insert({
     organization_id: profile.organization_id,
     company_code,
     name,
@@ -145,11 +145,11 @@ if (existingByCode && existingByCode.length > 0) {
     cmr_insurance_amount: is_carrier ? Number(cmr_insurance_amount) : null,
     notes,
     created_by: user.id,
-  });
+  }).select('id, name, company_code').single();
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ success: true });
+  return NextResponse.json({ success: true, company: data });
 }
