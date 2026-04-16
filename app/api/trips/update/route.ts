@@ -2,11 +2,17 @@ import { NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/auth-helpers-nextjs';
 import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
+import { canAccessTripViaCargoRoute } from '@/lib/server/cargo-legs';
 import {
   replaceTripManagerShare,
   validateShareableManager,
 } from '@/lib/server/manager-shares';
 import { validateCompanyTypeForOrganization } from '@/lib/server/company-type-validation';
+import {
+  canAccessLinkedRecord,
+  loadCurrentLinkingProfile,
+  loadTripLinkContext,
+} from '@/lib/server/order-trip-linking';
 
 export async function POST(req: Request) {
   const cookieStore = cookies();
@@ -67,38 +73,31 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Invalid status' }, { status: 400 });
   }
 
-  const { data: profile, error: profileError } = await serviceSupabase
-    .from('user_profiles')
-    .select('organization_id, role, is_super_admin, is_creator')
-    .eq('id', user.id)
-    .single();
-
-  if (profileError || !profile?.organization_id) {
-    return NextResponse.json(
-      { error: 'User organization not found' },
-      { status: 400 }
-    );
-  }
-
-  const { data: existingTrip, error: existingTripError } = await serviceSupabase
-    .from('trips')
-    .select('id, created_by, organization_id')
-    .eq('id', id)
-    .single();
-
-  if (existingTripError || !existingTrip) {
-    return NextResponse.json({ error: 'Trip not found' }, { status: 404 });
-  }
+  const profile = await loadCurrentLinkingProfile(serviceSupabase, user.id);
+  const { trip: existingTrip, sharedManagerUserId } = await loadTripLinkContext(
+    serviceSupabase,
+    id
+  );
 
   if (existingTrip.organization_id !== profile.organization_id) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  const canEdit =
-    existingTrip.created_by === user.id ||
-    profile.is_super_admin === true ||
-    profile.is_creator === true ||
-    ['OWNER', 'ADMIN'].includes(profile.role);
+  const canEditViaShare = canAccessLinkedRecord({
+    profile,
+    currentUserId: user.id,
+    createdBy: existingTrip.created_by,
+    sharedManagerUserId,
+  });
+
+  const canEditViaCargoRoute = await canAccessTripViaCargoRoute(
+    serviceSupabase,
+    user.id,
+    profile.organization_id as string,
+    id
+  );
+
+  const canEdit = canEditViaShare || canEditViaCargoRoute;
 
   if (!canEdit) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });

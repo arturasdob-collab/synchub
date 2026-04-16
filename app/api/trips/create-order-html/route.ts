@@ -4,6 +4,12 @@ import { NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/auth-helpers-nextjs';
 import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
+import { canAccessTripViaCargoRoute } from '@/lib/server/cargo-legs';
+import {
+  canAccessLinkedRecord,
+  loadCurrentLinkingProfile,
+  loadTripLinkContext,
+} from '@/lib/server/order-trip-linking';
 
 function text(value: string | number | null | undefined) {
   return value === null || value === undefined || value === '' ? '-' : String(value);
@@ -107,15 +113,21 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Trip id is required' }, { status: 400 });
   }
 
-  const { data: profile, error: profileError } = await serviceSupabase
+  const { data: userProfile, error: profileError } = await serviceSupabase
     .from('user_profiles')
     .select('id, organization_id, role, is_super_admin, is_creator, first_name, last_name')
     .eq('id', user.id)
     .single();
 
-  if (profileError || !profile?.organization_id) {
+  if (profileError || !userProfile?.organization_id) {
     return NextResponse.json({ error: 'User organization not found' }, { status: 400 });
   }
+
+  const profile = await loadCurrentLinkingProfile(serviceSupabase, user.id);
+  const { trip: tripContext, sharedManagerUserId } = await loadTripLinkContext(
+    serviceSupabase,
+    tripId
+  );
 
   const { data: trip, error: tripError } = await serviceSupabase
     .from('trips')
@@ -153,15 +165,53 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Trip not found' }, { status: 404 });
   }
 
+  const { data: sourceOrganization, error: sourceOrganizationError } = await serviceSupabase
+    .from('organizations')
+    .select(
+      `
+        id,
+        name,
+        company_code,
+        vat_code,
+        address,
+        city,
+        postal_code,
+        country,
+        contact_phone,
+        contact_email
+      `
+    )
+    .eq('id', userProfile.organization_id)
+    .single();
+
+  if (sourceOrganizationError || !sourceOrganization) {
+    return NextResponse.json(
+      { error: sourceOrganizationError?.message || 'Organization not found' },
+      { status: 404 }
+    );
+  }
+
   const carrier = Array.isArray((trip as any).carrier)
     ? (trip as any).carrier[0] ?? null
     : (trip as any).carrier;
 
-  const canAccess =
-    (trip as any).created_by === user.id ||
-    profile.is_super_admin === true ||
-    profile.is_creator === true ||
-    ['OWNER', 'ADMIN'].includes(profile.role);
+  const canAccessViaLinkedShare =
+    tripContext.organization_id === profile.organization_id &&
+    canAccessLinkedRecord({
+      profile,
+      currentUserId: user.id,
+      createdBy: tripContext.created_by,
+      sharedManagerUserId,
+    });
+
+  const canAccessViaCargoRoute = await canAccessTripViaCargoRoute(
+    serviceSupabase,
+    user.id,
+    profile.organization_id as string,
+    tripId
+  );
+
+  const canAccess = canAccessViaLinkedShare || canAccessViaCargoRoute;
 
   if (!canAccess) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -228,7 +278,7 @@ export async function POST(req: Request) {
       )
     `)
     .eq('trip_id', tripId)
-    .eq('organization_id', profile.organization_id)
+    .eq('organization_id', tripContext.organization_id)
     .order('created_at', { ascending: true });
 
   if (linkedOrdersError) {
@@ -359,9 +409,21 @@ export async function POST(req: Request) {
       ? `${trip.payment_term_days}`
       : '___';
 
-  const paymentSummary = `${paymentDays} days after receipt of complete and valid documents by email at INVOICES@TEMPUS.LT. Documents must be sent in PDF format. If originals are required by post, use the company details above.`;
+  const organizationAddress = [
+    sourceOrganization.address,
+    sourceOrganization.postal_code,
+    sourceOrganization.city,
+    sourceOrganization.country,
+  ]
+    .filter(Boolean)
+    .join(', ');
 
-  const representative = `${text(profile.first_name)} ${text(profile.last_name)}`.trim();
+  const organizationEmail = empty(sourceOrganization.contact_email);
+  const paymentSummary = organizationEmail
+    ? `${paymentDays} days after receipt of complete and valid documents by email at ${organizationEmail}. Documents must be sent in PDF format. If originals are required by post, use the company details above.`
+    : `${paymentDays} days after receipt of complete and valid documents. If originals are required by post, use the company details above.`;
+
+  const representative = `${text(userProfile.first_name)} ${text(userProfile.last_name)}`.trim();
   const loadingDateValue = draft?.id ? draft.loading_date ?? '' : prefilledLoadingDate;
   const loadingTimeFromValue = draft?.id
     ? formatTimeValue(draft.loading_time_from)
@@ -677,7 +739,7 @@ export async function POST(req: Request) {
 </div>
 
     <div class="header">
-      <div class="logo">TEMPUS TRANS</div>
+      <div class="logo">${esc(text(sourceOrganization.name))}</div>
       <div class="subtitle">TRANSPORT ORDER</div>
       <div class="meta">
         Order No. <span>${esc(orderNumber)}</span>
@@ -690,11 +752,11 @@ export async function POST(req: Request) {
       <div>
         <div class="section-title">CLIENT</div>
         <div class="box party-box">
-          <div class="kv"><b>Company:</b><span>UAB "TEMPUS TRANS"</span></div>
-          <div class="kv"><b>Address:</b><span>Paneriu g. 45-3, Vilnius, LT-03202</span></div>
-          <div class="kv"><b>Code:</b><span>300570206</span></div>
-          <div class="kv"><b>VAT:</b><span>LT100002407511</span></div>
-          <div class="kv"><b>Phone:</b><span>+370 5 2000570</span></div>
+          <div class="kv"><b>Company:</b><span>${esc(empty(sourceOrganization.name))}</span></div>
+          <div class="kv"><b>Address:</b><span>${esc(empty(organizationAddress))}</span></div>
+          <div class="kv"><b>Code:</b><span>${esc(empty(sourceOrganization.company_code))}</span></div>
+          <div class="kv"><b>VAT:</b><span>${esc(empty(sourceOrganization.vat_code))}</span></div>
+          <div class="kv"><b>Phone:</b><span>${esc(empty(sourceOrganization.contact_phone))}</span></div>
         </div>
       </div>
 
@@ -821,7 +883,7 @@ Transport shall be carried out in accordance with applicable CMR requirements an
       <div class="grid-2">
         <div>
           <div class="sign-box">
-            <div class="kv"><b>Order submitted by:</b><span>UAB "TEMPUS TRANS"</span></div>
+            <div class="kv"><b>Order submitted by:</b><span>${esc(empty(sourceOrganization.name))}</span></div>
             <div class="kv"><b>Representative:</b><span>${esc(representative)}</span></div>
             <div class="kv"><b>Signature:</b><span></span></div>
           </div>

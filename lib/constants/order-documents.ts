@@ -4,13 +4,38 @@ export const ORDER_DOCUMENT_ALLOWED_EXTENSIONS = [
   '.pdf',
   '.doc',
   '.docx',
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.webp',
 ] as const;
 
 export const ORDER_DOCUMENT_ALLOWED_MIME_TYPES = [
   'application/pdf',
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
 ] as const;
+
+export const ORDER_DOCUMENT_ZONES = [
+  'order',
+  'customs_documents',
+  'cmr',
+  'cargo_photo',
+  'additional',
+] as const;
+
+export type OrderDocumentZone = (typeof ORDER_DOCUMENT_ZONES)[number];
+
+export const ORDER_DOCUMENT_ZONE_LABELS: Record<OrderDocumentZone, string> = {
+  order: 'Order',
+  customs_documents: 'Customs documents',
+  cmr: 'CMR',
+  cargo_photo: 'Cargo photo',
+  additional: 'Additional documents / photos',
+};
 
 export const ORDER_DOCUMENT_ACCEPT_ATTRIBUTE =
   ORDER_DOCUMENT_ALLOWED_EXTENSIONS.join(',');
@@ -31,4 +56,15 @@ export function formatOrderDocumentFileSize(bytes: number | null | undefined) {
   }
 
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function normalizeOrderDocumentZone(
+  value: string | null | undefined,
+  fallback: OrderDocumentZone = 'order'
+): OrderDocumentZone {
+  const normalizedValue = (value || '').trim().toLowerCase();
+
+  return ORDER_DOCUMENT_ZONES.includes(normalizedValue as OrderDocumentZone)
+    ? (normalizedValue as OrderDocumentZone)
+    : fallback;
 }

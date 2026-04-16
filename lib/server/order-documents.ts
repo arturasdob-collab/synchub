@@ -3,7 +3,15 @@ import {
   ORDER_DOCUMENT_ALLOWED_EXTENSIONS,
   ORDER_DOCUMENT_ALLOWED_MIME_TYPES,
   ORDER_DOCUMENT_MAX_SIZE_BYTES,
+  normalizeOrderDocumentZone,
+  type OrderDocumentZone,
 } from '@/lib/constants/order-documents';
+import { canAccessOrderViaCargoRoute } from '@/lib/server/cargo-legs';
+import {
+  canAccessLinkedRecord,
+  loadCurrentLinkingProfile,
+  loadOrderLinkContext,
+} from '@/lib/server/order-trip-linking';
 
 type OrderDocumentProfile = {
   organization_id: string | null;
@@ -21,12 +29,14 @@ type OrderDocumentOrder = {
 type OrderDocumentRow = {
   id: string;
   organization_id: string;
+  uploaded_by_organization_id: string;
   order_id: string;
   storage_bucket: string;
   storage_path: string;
   original_file_name: string;
   mime_type: string;
   file_size: number;
+  document_zone: OrderDocumentZone;
   created_by: string | null;
 };
 
@@ -35,6 +45,10 @@ const mimeTypeByExtension: Record<string, (typeof ORDER_DOCUMENT_ALLOWED_MIME_TY
   '.doc': 'application/msword',
   '.docx':
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
 };
 
 export function sanitizeOrderDocumentFileName(fileName: string) {
@@ -91,19 +105,20 @@ export function validateOrderDocumentFile(params: {
   );
 
   if (!normalizedMimeType) {
-    return 'Only PDF and Word documents are allowed';
+    return 'Only PDF, Word, and image files are allowed';
   }
 
   return null;
 }
 
 export function buildOrderDocumentStoragePath(params: {
-  organizationId: string;
+  sourceOrganizationId: string;
+  uploadedByOrganizationId: string;
   orderId: string;
   documentId: string;
   fileName: string;
 }) {
-  return `${params.organizationId}/${params.orderId}/${params.documentId}-${sanitizeOrderDocumentFileName(
+  return `${params.sourceOrganizationId}/${params.orderId}/${params.uploadedByOrganizationId}/${params.documentId}-${sanitizeOrderDocumentFileName(
     params.fileName
   )}`;
 }
@@ -126,38 +141,41 @@ export async function loadOrderDocumentOrderContext(
   userId: string,
   orderId: string
 ) {
-  const [profileResponse, orderResponse] = await Promise.all([
-    serviceSupabase
-      .from('user_profiles')
-      .select('organization_id, is_super_admin, is_creator, role')
-      .eq('id', userId)
-      .single(),
-    serviceSupabase
-      .from('orders')
-      .select('id, organization_id, created_by')
-      .eq('id', orderId)
-      .single(),
-  ]);
+  const profile = (await loadCurrentLinkingProfile(
+    serviceSupabase,
+    userId
+  )) as OrderDocumentProfile;
+  const { order, sharedManagerUserId, sharedOrganizationId } =
+    await loadOrderLinkContext(serviceSupabase, orderId);
+  const canAccessViaCargoRoute = await canAccessOrderViaCargoRoute(
+    serviceSupabase,
+    userId,
+    profile.organization_id as string,
+    orderId
+  );
 
-  if (profileResponse.error || !profileResponse.data?.organization_id) {
-    throw new Error('User organization not found');
-  }
+  const isSameOrganization = order.organization_id === profile.organization_id;
+  const canView = isSameOrganization
+    ? canAccessLinkedRecord({
+        profile,
+        currentUserId: userId,
+        createdBy: order.created_by,
+        sharedManagerUserId,
+      })
+    : ((sharedOrganizationId === profile.organization_id &&
+        sharedManagerUserId === userId) ||
+        canAccessViaCargoRoute);
 
-  if (orderResponse.error || !orderResponse.data) {
-    throw new Error('Order not found');
-  }
-
-  const profile = profileResponse.data as OrderDocumentProfile;
-  const order = orderResponse.data as OrderDocumentOrder;
-
-  if (order.organization_id !== profile.organization_id) {
+  if (!canView) {
     throw new Error('Forbidden');
   }
 
   return {
     profile,
-    order,
-    canManage: canManageOrderDocuments(userId, profile, order),
+    order: order as OrderDocumentOrder,
+    isSameOrganization,
+    canView,
+    canManageAll: isSameOrganization && canManageOrderDocuments(userId, profile, order),
   };
 }
 
@@ -168,17 +186,21 @@ export async function loadOrderDocumentContextById(
 ) {
   const documentResponse = await serviceSupabase
     .from('order_documents')
-    .select(`
-      id,
-      organization_id,
-      order_id,
-      storage_bucket,
-      storage_path,
-      original_file_name,
-      mime_type,
-      file_size,
-      created_by
-    `)
+    .select(
+      `
+        id,
+        organization_id,
+        uploaded_by_organization_id,
+        order_id,
+        storage_bucket,
+        storage_path,
+        original_file_name,
+        mime_type,
+        file_size,
+        document_zone,
+        created_by
+      `
+    )
     .eq('id', documentId)
     .single();
 
@@ -186,19 +208,36 @@ export async function loadOrderDocumentContextById(
     throw new Error('Document not found');
   }
 
-  const document = documentResponse.data as OrderDocumentRow;
+  const document = {
+    ...(documentResponse.data as any),
+    document_zone: normalizeOrderDocumentZone(
+      (documentResponse.data as any).document_zone,
+      'order'
+    ),
+  } as OrderDocumentRow;
+
   const orderContext = await loadOrderDocumentOrderContext(
     serviceSupabase,
     userId,
     document.order_id
   );
 
-  if (document.organization_id !== orderContext.profile.organization_id) {
+  if (document.organization_id !== orderContext.order.organization_id) {
     throw new Error('Forbidden');
   }
 
+  const canView =
+    orderContext.isSameOrganization || document.document_zone !== 'order';
+
+  if (!canView) {
+    throw new Error('Forbidden');
+  }
+
+  const canManage = orderContext.canManageAll || document.created_by === userId;
+
   return {
     ...orderContext,
+    canManage,
     document,
   };
 }

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/auth-helpers-nextjs';
 import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
+import { normalizeOrderDocumentZone } from '@/lib/constants/order-documents';
 import { loadOrderDocumentOrderContext } from '@/lib/server/order-documents';
 
 function normalizeText(value: unknown) {
@@ -48,22 +49,29 @@ export async function GET(req: Request) {
   }
 
   try {
-    const { profile } = await loadOrderDocumentOrderContext(
+    const { order, canView, isSameOrganization } = await loadOrderDocumentOrderContext(
       serviceSupabase,
       user.id,
       orderId
     );
+
+    if (!canView) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
 
     const { data, error } = await serviceSupabase
       .from('order_documents')
       .select(`
         id,
         order_id,
+        organization_id,
+        uploaded_by_organization_id,
         storage_bucket,
         storage_path,
         original_file_name,
         mime_type,
         file_size,
+        document_zone,
         created_at,
         created_by_user:created_by (
           first_name,
@@ -71,15 +79,21 @@ export async function GET(req: Request) {
         )
       `)
       .eq('order_id', orderId)
-      .eq('organization_id', profile.organization_id)
+      .eq('organization_id', order.organization_id)
       .order('created_at', { ascending: false });
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
+    const visibleDocuments = (data || []).filter((document: any) => {
+      const documentZone = normalizeOrderDocumentZone(document.document_zone, 'order');
+
+      return isSameOrganization || documentZone !== 'order';
+    });
+
     const signedUrls = await Promise.all(
-      (data || []).map(async (document: any) => {
+      visibleDocuments.map(async (document: any) => {
         const { data: signedUrlData } = await serviceSupabase.storage
           .from(document.storage_bucket)
           .createSignedUrl(document.storage_path, 60 * 60);
@@ -90,6 +104,8 @@ export async function GET(req: Request) {
           original_file_name: document.original_file_name,
           mime_type: document.mime_type,
           file_size: document.file_size,
+          document_zone: normalizeOrderDocumentZone(document.document_zone, 'order'),
+          uploaded_by_organization_id: document.uploaded_by_organization_id ?? null,
           created_at: document.created_at,
           signed_url: signedUrlData?.signedUrl ?? null,
           created_by_user: Array.isArray(document.created_by_user)

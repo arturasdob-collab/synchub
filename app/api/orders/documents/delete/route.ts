@@ -48,7 +48,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { document, profile, canManage } = await loadOrderDocumentContextById(
+    const { document, order, canManage } = await loadOrderDocumentContextById(
       serviceSupabase,
       user.id,
       documentId
@@ -70,7 +70,7 @@ export async function POST(req: Request) {
       .from('order_documents')
       .delete()
       .eq('id', document.id)
-      .eq('organization_id', profile.organization_id);
+      .eq('organization_id', order.organization_id);
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });

@@ -3,6 +3,7 @@ import { createServerClient } from '@supabase/auth-helpers-nextjs';
 import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 import { ORDER_DOCUMENTS_BUCKET } from '@/lib/constants/order-documents';
+import { normalizeOrderDocumentZone } from '@/lib/constants/order-documents';
 import { createOrderImportRecord } from '@/lib/server/order-imports';
 import {
   buildOrderDocumentStoragePath,
@@ -49,6 +50,7 @@ export async function POST(req: Request) {
 
   const formData = await req.formData();
   const orderId = normalizeText(formData.get('order_id'));
+  const requestedZone = normalizeText(formData.get('document_zone'));
   const fileEntry = formData.get('file');
   const skipOrderImport = normalizeText(formData.get('skip_order_import')) === '1';
 
@@ -61,14 +63,27 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { order, profile, canManage } = await loadOrderDocumentOrderContext(
+    const { order, profile, canView, canManageAll, isSameOrganization } =
+      await loadOrderDocumentOrderContext(
       serviceSupabase,
       user.id,
       orderId
     );
 
-    if (!canManage) {
+    if (!canView) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
+    const documentZone = normalizeOrderDocumentZone(
+      requestedZone,
+      isSameOrganization ? 'order' : 'additional'
+    );
+
+    if (documentZone === 'order' && !isSameOrganization) {
+      return NextResponse.json(
+        { error: 'Only the source organization can upload order documents' },
+        { status: 403 }
+      );
     }
 
     const validationError = validateOrderDocumentFile({
@@ -87,7 +102,8 @@ export async function POST(req: Request) {
       fileEntry.type
     )!;
     const storagePath = buildOrderDocumentStoragePath({
-      organizationId: profile.organization_id!,
+      sourceOrganizationId: order.organization_id,
+      uploadedByOrganizationId: profile.organization_id!,
       orderId: order.id,
       documentId,
       fileName: fileEntry.name,
@@ -110,16 +126,20 @@ export async function POST(req: Request) {
       .from('order_documents')
       .insert({
         id: documentId,
-        organization_id: profile.organization_id,
+        organization_id: order.organization_id,
+        uploaded_by_organization_id: profile.organization_id,
         order_id: order.id,
         storage_bucket: ORDER_DOCUMENTS_BUCKET,
         storage_path: storagePath,
         original_file_name: fileEntry.name,
         mime_type: mimeType,
         file_size: fileEntry.size,
+        document_zone: documentZone,
         created_by: user.id,
       })
-      .select('id, original_file_name, mime_type, file_size, created_at')
+      .select(
+        'id, original_file_name, mime_type, file_size, created_at, document_zone, uploaded_by_organization_id'
+      )
       .single();
 
     if (error) {
@@ -129,9 +149,11 @@ export async function POST(req: Request) {
 
     try {
       const orderImport = skipOrderImport
+        || documentZone !== 'order'
+        || !canManageAll
         ? null
         : await createOrderImportRecord(serviceSupabase, {
-            organizationId: profile.organization_id!,
+            organizationId: order.organization_id,
             userId: user.id,
             sourceDocumentId: data.id,
             sourceFileName: fileEntry.name,
