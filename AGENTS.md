@@ -37,6 +37,24 @@ Current strategic direction:
   - Ctrl + C
   - npm run dev
 
+## Git / Deploy rules
+- Active development branch: `master`
+- Vercel production deploys from `master`
+- do not switch active work to `main`
+- do not suggest moving work back to `main`
+- keep production work on `master`
+- do not change branch strategy unless explicitly asked
+
+## Change approval rules
+- keep changes minimal and safe
+- do not touch unrelated logic
+- if a build fails, fix only the exact blocking error first
+- always tell the user which file(s) were changed
+- after each completed safe change:
+  1. show what was changed
+  2. if the user approves, commit to `master`
+  3. push to `origin/master`
+
 ## Current stable modules
 These are considered working and should not be broken unnecessarily:
 - Admin / Users

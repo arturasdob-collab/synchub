@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/auth-helpers-nextjs';
 import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
-import { cargoLegSelect, mapCargoLeg } from '@/lib/server/cargo-legs';
+import {
+  canAccessOrderViaCargoRoute,
+  cargoLegSelect,
+  mapCargoLeg,
+} from '@/lib/server/cargo-legs';
 import {
   canAccessLinkedRecord,
   loadCurrentLinkingProfile,
@@ -51,25 +55,46 @@ export async function GET(req: NextRequest) {
 
   try {
     const profile = await loadCurrentLinkingProfile(serviceSupabase, user.id);
-    const { order, sharedManagerUserId } = await loadOrderLinkContext(
+    const { order, sharedManagerUserId, sharedOrganizationId } = await loadOrderLinkContext(
       serviceSupabase,
       orderId
     );
 
-    if (order.organization_id !== profile.organization_id) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    const canAccessSameOrgOrder =
+      order.organization_id === profile.organization_id &&
+      canAccessLinkedRecord({
+        profile,
+        currentUserId: user.id,
+        createdBy: order.created_by,
+        sharedManagerUserId,
+      });
 
-    const canAccessOrder = canAccessLinkedRecord({
-      profile,
-      currentUserId: user.id,
-      createdBy: order.created_by,
-      sharedManagerUserId,
-    });
+    const canAccessSharedCrossOrgOrder =
+      order.organization_id !== profile.organization_id &&
+      sharedOrganizationId === profile.organization_id &&
+      canAccessLinkedRecord({
+        profile,
+        currentUserId: user.id,
+        createdBy: order.created_by,
+        sharedManagerUserId,
+      });
+
+    const canAccessCargoRouteOrder = await canAccessOrderViaCargoRoute(
+      serviceSupabase,
+      user.id,
+      profile.organization_id!,
+      orderId
+    );
+
+    const canAccessOrder =
+      canAccessSameOrgOrder || canAccessSharedCrossOrgOrder || canAccessCargoRouteOrder;
 
     if (!canAccessOrder) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
+
+    const sourceOrganizationId = order.organization_id;
+    const canManageLinkedTrips = canAccessSameOrgOrder;
 
     const [linkedRowsResponse, linkedTripIdsResponse] = await Promise.all([
       serviceSupabase
@@ -92,12 +117,12 @@ export async function GET(req: NextRequest) {
           )
         `)
         .eq('order_id', orderId)
-        .eq('organization_id', profile.organization_id)
+        .eq('organization_id', sourceOrganizationId)
         .order('created_at', { ascending: false }),
       serviceSupabase
         .from('order_trip_links')
         .select('trip_id')
-        .eq('organization_id', profile.organization_id),
+        .eq('organization_id', sourceOrganizationId),
     ]);
 
     if (linkedRowsResponse.error || linkedTripIdsResponse.error) {
@@ -123,7 +148,7 @@ export async function GET(req: NextRequest) {
         await serviceSupabase
           .from('cargo_legs')
           .select(cargoLegSelect)
-          .eq('organization_id', profile.organization_id)
+          .eq('organization_id', sourceOrganizationId)
           .in('order_trip_link_id', linkedOrderLinkIds)
           .order('leg_order', { ascending: true });
 
@@ -142,7 +167,6 @@ export async function GET(req: NextRequest) {
     for (const cargoLeg of cargoLegRows) {
       const linkId = cargoLeg.order_trip_link_id as string;
       const normalizedCargoLeg = mapCargoLeg(cargoLeg);
-
       const existing = cargoLegsByLinkId.get(linkId) || [];
       existing.push(normalizedCargoLeg);
       cargoLegsByLinkId.set(linkId, existing);
@@ -180,23 +204,22 @@ export async function GET(req: NextRequest) {
         .filter(Boolean) as string[]
     );
 
-    if (linkedTrips.length > 0) {
+    if (linkedTrips.length > 0 || !canManageLinkedTrips) {
       return NextResponse.json({
         linked_trips: linkedTrips,
         available_trips: [],
+        awaiting_trip_number: false,
       });
     }
 
     const effectiveManagerUserId =
       selectedTripManagerUserId || sharedManagerUserId || user.id;
 
-    let sharedTripsQuery = serviceSupabase
+    const { data: sharedTripIds, error: sharedTripIdsError } = await serviceSupabase
       .from('trip_manager_shares')
       .select('trip_id')
-      .eq('organization_id', profile.organization_id)
+      .eq('organization_id', sourceOrganizationId)
       .eq('manager_user_id', effectiveManagerUserId);
-
-    const { data: sharedTripIds, error: sharedTripIdsError } = await sharedTripsQuery;
 
     if (sharedTripIdsError) {
       return NextResponse.json({ error: sharedTripIdsError.message }, { status: 500 });
@@ -242,7 +265,7 @@ export async function GET(req: NextRequest) {
             company_code
           )
         `)
-        .eq('organization_id', profile.organization_id)
+        .eq('organization_id', sourceOrganizationId)
         .in('id', sharedTripIdList)
         .order('created_at', { ascending: false })
         .limit(20);
@@ -299,7 +322,7 @@ export async function GET(req: NextRequest) {
             company_code
           )
         `)
-        .eq('organization_id', profile.organization_id)
+        .eq('organization_id', sourceOrganizationId)
         .eq('trip_number', tripNumberQuery)
         .maybeSingle();
 
