@@ -77,6 +77,16 @@ type LinkedOrderRow = {
   internal_order_number: string;
   client_order_number: string | null;
   status: string | null;
+  loading_date: string | null;
+  loading_city: string | null;
+  loading_country: string | null;
+  unloading_date: string | null;
+  unloading_city: string | null;
+  unloading_country: string | null;
+  cargo_description: string | null;
+  cargo_quantity: string | null;
+  cargo_kg: number | null;
+  cargo_ldm: number | null;
   price: number | null;
   currency: string | null;
   created_at: string | null;
@@ -119,12 +129,37 @@ type TripTabId = 'information' | 'linked_order' | 'segments';
 
 type CargoLegRow = {
   id: string;
+  responsible_organization_id: string | null;
+  responsible_warehouse_id: string | null;
+  show_to_all_managers: boolean;
   order_trip_link_id: string;
   linked_trip_id: string | null;
   leg_order: number;
   leg_type: CargoLegType;
   created_at: string | null;
   updated_at: string | null;
+  responsible_organization: {
+    id: string | null;
+    name: string | null;
+    address: string | null;
+    city: string | null;
+    postal_code: string | null;
+    country: string | null;
+  } | null;
+  responsible_warehouse: {
+    id: string | null;
+    name: string | null;
+    address: string | null;
+    city: string | null;
+    postal_code: string | null;
+    country: string | null;
+  } | null;
+  shared_managers: Array<{
+    id: string | null;
+    shared_organization_id: string | null;
+    first_name: string | null;
+    last_name: string | null;
+  }>;
   linked_trip: SegmentTripOption | null;
 };
 
@@ -197,6 +232,54 @@ function formatCargoLegOptionLabel(cargoLeg: CargoLegRow) {
   ].filter(Boolean);
 
   return parts.join(' / ');
+}
+
+function formatLocationLine(parts: Array<string | null | undefined>) {
+  const normalized = parts
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter((value) => value !== '');
+
+  return normalized.length > 0 ? normalized.join(', ') : '-';
+}
+
+function formatCargoLegResponsibility(cargoLeg: CargoLegRow) {
+  const organizationName = cargoLeg.responsible_organization?.name?.trim() || '-';
+  const warehouseName = cargoLeg.responsible_warehouse?.name?.trim();
+
+  return warehouseName ? `${organizationName} / ${warehouseName}` : organizationName;
+}
+
+function formatCargoLegAddress(cargoLeg: CargoLegRow) {
+  const source = cargoLeg.responsible_warehouse || cargoLeg.responsible_organization;
+
+  if (!source) return '-';
+
+  return formatLocationLine([
+    source.address,
+    source.city,
+    source.postal_code,
+    source.country,
+  ]);
+}
+
+function formatLinkedOrderRouteSummary(orderRow: LinkedOrderRow, currentTripId: string) {
+  const matchingCargoLeg =
+    orderRow.cargo_legs.find((cargoLeg) => cargoLeg.linked_trip_id === currentTripId) ||
+    orderRow.cargo_legs[0] ||
+    null;
+
+  if (!matchingCargoLeg) {
+    return null;
+  }
+
+  return {
+    cargoLeg: matchingCargoLeg,
+    title: `${matchingCargoLeg.leg_order}. ${formatCargoLegTypeLabel(
+      matchingCargoLeg.leg_type
+    )}`,
+    organization: formatCargoLegResponsibility(matchingCargoLeg),
+    address: formatCargoLegAddress(matchingCargoLeg),
+  };
 }
 
 function getNextSegmentOrder(segments: TripSegmentRow[]) {
@@ -1639,6 +1722,55 @@ export default function TripPage() {
                           .filter(Boolean)
                           .join(' / ') || '-'}
                       </div>
+                      <div className="truncate text-xs text-slate-500">
+                        {[
+                          formatLocationLine([
+                            orderRow.loading_country,
+                            orderRow.loading_city,
+                            orderRow.loading_date,
+                          ]),
+                          formatLocationLine([
+                            orderRow.unloading_country,
+                            orderRow.unloading_city,
+                            orderRow.unloading_date,
+                          ]),
+                        ].join(' -> ')}
+                      </div>
+                      <div className="truncate text-xs text-slate-500">
+                        {[
+                          orderRow.cargo_description || null,
+                          orderRow.cargo_quantity ? `${orderRow.cargo_quantity} QTY` : null,
+                          orderRow.cargo_kg !== null && orderRow.cargo_kg !== undefined
+                            ? `${orderRow.cargo_kg} KG`
+                            : null,
+                          orderRow.cargo_ldm !== null && orderRow.cargo_ldm !== undefined
+                            ? `${orderRow.cargo_ldm} LDM`
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' / ') || '-'}
+                      </div>
+                      {(() => {
+                        const routeSummary = formatLinkedOrderRouteSummary(
+                          orderRow,
+                          trip.id
+                        );
+
+                        if (!routeSummary) {
+                          return null;
+                        }
+
+                        return (
+                          <>
+                            <div className="truncate text-xs font-medium text-slate-700">
+                              {routeSummary.title} / {routeSummary.organization}
+                            </div>
+                            <div className="truncate text-xs text-slate-500">
+                              {routeSummary.address}
+                            </div>
+                          </>
+                        );
+                      })()}
                     </div>
 
                     <div className="flex items-center justify-start gap-2 xl:justify-end">

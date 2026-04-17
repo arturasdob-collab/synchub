@@ -7,6 +7,7 @@ import {
   loadCurrentLinkingProfile,
   loadTripLinkContext,
 } from '@/lib/server/order-trip-linking';
+import { cargoLegSelect, mapCargoLeg } from '@/lib/server/cargo-legs';
 
 export async function GET(req: NextRequest) {
   const cookieStore = cookies();
@@ -80,6 +81,16 @@ export async function GET(req: NextRequest) {
             internal_order_number,
             client_order_number,
             status,
+            loading_date,
+            loading_city,
+            loading_country,
+            unloading_date,
+            unloading_city,
+            unloading_country,
+            cargo_description,
+            cargo_quantity,
+            cargo_kg,
+            cargo_ldm,
             price,
             currency,
             created_at,
@@ -120,30 +131,7 @@ export async function GET(req: NextRequest) {
       const { data: linkedCargoLegs, error: linkedCargoLegsError } =
         await serviceSupabase
           .from('cargo_legs')
-          .select(
-            `
-              id,
-              order_trip_link_id,
-              linked_trip_id,
-              leg_order,
-              leg_type,
-              created_at,
-              updated_at,
-              linked_trip:linked_trip_id (
-                id,
-                trip_number,
-                status,
-                driver_name,
-                truck_plate,
-                trailer_plate,
-                is_groupage,
-                carrier:carrier_company_id (
-                  name,
-                  company_code
-                )
-              )
-            `
-          )
+          .select(cargoLegSelect)
           .eq('organization_id', profile.organization_id)
           .in('order_trip_link_id', linkedOrderLinkIds)
           .order('leg_order', { ascending: true });
@@ -162,41 +150,7 @@ export async function GET(req: NextRequest) {
 
     for (const cargoLeg of cargoLegRows) {
       const linkId = cargoLeg.order_trip_link_id as string;
-      const linkedTrip = Array.isArray(cargoLeg.linked_trip)
-        ? cargoLeg.linked_trip[0] ?? null
-        : cargoLeg.linked_trip;
-      const linkedTripCarrier = linkedTrip
-        ? Array.isArray(linkedTrip.carrier)
-          ? linkedTrip.carrier[0] ?? null
-          : linkedTrip.carrier
-        : null;
-
-      const normalizedCargoLeg = {
-        id: cargoLeg.id,
-        order_trip_link_id: cargoLeg.order_trip_link_id,
-        linked_trip_id: cargoLeg.linked_trip_id ?? null,
-        leg_order: cargoLeg.leg_order,
-        leg_type: cargoLeg.leg_type,
-        created_at: cargoLeg.created_at ?? null,
-        updated_at: cargoLeg.updated_at ?? null,
-        linked_trip: linkedTrip
-          ? {
-              id: linkedTrip.id,
-              trip_number: linkedTrip.trip_number,
-              status: linkedTrip.status ?? null,
-              driver_name: linkedTrip.driver_name ?? null,
-              truck_plate: linkedTrip.truck_plate ?? null,
-              trailer_plate: linkedTrip.trailer_plate ?? null,
-              is_groupage: linkedTrip.is_groupage ?? null,
-              carrier: linkedTripCarrier
-                ? {
-                    name: linkedTripCarrier.name ?? null,
-                    company_code: linkedTripCarrier.company_code ?? null,
-                  }
-                : null,
-            }
-          : null,
-      };
+      const normalizedCargoLeg = mapCargoLeg(cargoLeg);
 
       const existing = cargoLegsByLinkId.get(linkId) || [];
       existing.push(normalizedCargoLeg);
@@ -218,6 +172,16 @@ export async function GET(req: NextRequest) {
           internal_order_number: order.internal_order_number,
           client_order_number: order.client_order_number ?? null,
           status: order.status ?? null,
+          loading_date: order.loading_date ?? null,
+          loading_city: order.loading_city ?? null,
+          loading_country: order.loading_country ?? null,
+          unloading_date: order.unloading_date ?? null,
+          unloading_city: order.unloading_city ?? null,
+          unloading_country: order.unloading_country ?? null,
+          cargo_description: order.cargo_description ?? null,
+          cargo_quantity: order.cargo_quantity ?? null,
+          cargo_kg: order.cargo_kg ?? null,
+          cargo_ldm: order.cargo_ldm ?? null,
           price: order.price ?? null,
           currency: order.currency ?? null,
           created_at: order.created_at ?? null,
