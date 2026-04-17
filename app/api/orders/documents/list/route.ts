@@ -2,7 +2,10 @@ import { NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/auth-helpers-nextjs';
 import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
-import { normalizeOrderDocumentZone } from '@/lib/constants/order-documents';
+import {
+  ORDER_DOCUMENT_ZONES,
+  normalizeOrderDocumentZone,
+} from '@/lib/constants/order-documents';
 import { loadOrderDocumentOrderContext } from '@/lib/server/order-documents';
 
 function normalizeText(value: unknown) {
@@ -49,7 +52,7 @@ export async function GET(req: Request) {
   }
 
   try {
-    const { order, canView, isSameOrganization } = await loadOrderDocumentOrderContext(
+    const { order, canView, isSameOrganization, canManageAll } = await loadOrderDocumentOrderContext(
       serviceSupabase,
       user.id,
       orderId
@@ -66,6 +69,7 @@ export async function GET(req: Request) {
         order_id,
         organization_id,
         uploaded_by_organization_id,
+        created_by,
         storage_bucket,
         storage_path,
         original_file_name,
@@ -108,6 +112,7 @@ export async function GET(req: Request) {
           uploaded_by_organization_id: document.uploaded_by_organization_id ?? null,
           created_at: document.created_at,
           signed_url: signedUrlData?.signedUrl ?? null,
+          can_manage: canManageAll === true || document.created_by === user.id,
           created_by_user: Array.isArray(document.created_by_user)
             ? (document.created_by_user[0] ?? null)
             : document.created_by_user,
@@ -115,7 +120,17 @@ export async function GET(req: Request) {
       })
     );
 
-    return NextResponse.json({ documents: signedUrls });
+    return NextResponse.json({
+      documents: signedUrls,
+      permissions: {
+        is_same_organization: isSameOrganization,
+        can_manage_all: canManageAll,
+        can_upload_order_zone: isSameOrganization,
+        visible_zones: isSameOrganization
+          ? ORDER_DOCUMENT_ZONES
+          : ORDER_DOCUMENT_ZONES.filter((zone) => zone !== 'order'),
+      },
+    });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Unexpected error' },

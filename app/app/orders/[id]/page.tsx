@@ -13,7 +13,10 @@ import {
 } from '@/lib/constants/cargo-leg-types';
 import {
   ORDER_DOCUMENT_ACCEPT_ATTRIBUTE,
+  ORDER_DOCUMENT_ZONE_LABELS,
+  ORDER_DOCUMENT_ZONES,
   formatOrderDocumentFileSize,
+  type OrderDocumentZone,
 } from '@/lib/constants/order-documents';
 import {
   PAYMENT_TYPE_OPTIONS,
@@ -279,14 +282,23 @@ type OrderDocumentRow = {
   original_file_name: string;
   mime_type: string;
   file_size: number;
+  document_zone: OrderDocumentZone;
   created_at: string | null;
   signed_url: string | null;
+  can_manage: boolean;
   created_by_user:
     | {
         first_name: string | null;
         last_name: string | null;
       }
     | null;
+};
+
+type OrderDocumentPermissions = {
+  is_same_organization: boolean;
+  can_manage_all: boolean;
+  can_upload_order_zone: boolean;
+  visible_zones: OrderDocumentZone[];
 };
 
 type CargoSectionTabId = 'linked_trip' | 'cargo_route' | 'documents';
@@ -574,6 +586,13 @@ export default function OrderPage() {
   const [documentsLoading, setDocumentsLoading] = useState(true);
   const [order, setOrder] = useState<OrderDetails | null>(null);
   const [orderDocuments, setOrderDocuments] = useState<OrderDocumentRow[]>([]);
+  const [orderDocumentPermissions, setOrderDocumentPermissions] =
+    useState<OrderDocumentPermissions>({
+      is_same_organization: true,
+      can_manage_all: false,
+      can_upload_order_zone: true,
+      visible_zones: [...ORDER_DOCUMENT_ZONES],
+    });
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [contacts, setContacts] = useState<CompanyContactOption[]>([]);
   const [contactsLoading, setContactsLoading] = useState(false);
@@ -1045,13 +1064,33 @@ export default function OrderPage() {
       if (!res.ok) {
         toast.error(data.error || 'Failed to load documents');
         setOrderDocuments([]);
+        setOrderDocumentPermissions({
+          is_same_organization: true,
+          can_manage_all: false,
+          can_upload_order_zone: true,
+          visible_zones: [...ORDER_DOCUMENT_ZONES],
+        });
         return;
       }
 
       setOrderDocuments(data.documents || []);
+      setOrderDocumentPermissions({
+        is_same_organization: Boolean(data.permissions?.is_same_organization),
+        can_manage_all: Boolean(data.permissions?.can_manage_all),
+        can_upload_order_zone: Boolean(data.permissions?.can_upload_order_zone),
+        visible_zones: Array.isArray(data.permissions?.visible_zones)
+          ? data.permissions.visible_zones
+          : [...ORDER_DOCUMENT_ZONES],
+      });
     } catch (error) {
       toast.error('Failed to load documents');
       setOrderDocuments([]);
+      setOrderDocumentPermissions({
+        is_same_organization: true,
+        can_manage_all: false,
+        can_upload_order_zone: true,
+        visible_zones: [...ORDER_DOCUMENT_ZONES],
+      });
     } finally {
       setDocumentsLoading(false);
     }
@@ -1331,7 +1370,10 @@ export default function OrderPage() {
     { id: 'documents', label: 'Documents' },
   ];
 
-  const uploadOrderDocuments = async (files: FileList | null) => {
+  const uploadOrderDocuments = async (
+    documentZone: OrderDocumentZone,
+    files: FileList | null
+  ) => {
     if (!files || files.length === 0) {
       return;
     }
@@ -1345,6 +1387,7 @@ export default function OrderPage() {
       for (const file of Array.from(files)) {
         const formData = new FormData();
         formData.append('order_id', orderId);
+        formData.append('document_zone', documentZone);
         formData.append('file', file);
 
         const res = await fetch('/api/orders/documents/upload', {
@@ -1361,7 +1404,7 @@ export default function OrderPage() {
       }
 
       if (uploadedCount > 0) {
-        toast.success(`Documents saved: ${uploadedCount}`);
+        toast.success(`${ORDER_DOCUMENT_ZONE_LABELS[documentZone]} saved: ${uploadedCount}`);
       }
 
       if (failedFiles.length > 0) {
@@ -2024,6 +2067,16 @@ export default function OrderPage() {
         .some((value) => value!.toLowerCase().includes(query));
     });
   }, [cargoLegWarehouseSearch, cargoLegWarehouses]);
+  const documentsByZone = useMemo(() => {
+    return ORDER_DOCUMENT_ZONES.reduce(
+      (acc, zone) => {
+        acc[zone] = orderDocuments.filter((document) => document.document_zone === zone);
+        return acc;
+      },
+      {} as Record<OrderDocumentZone, OrderDocumentRow[]>
+    );
+  }, [orderDocuments]);
+  const visibleDocumentZones = ORDER_DOCUMENT_ZONES;
 
   const renderCargoLegEditor = () => (
     <div className="rounded-lg border bg-white p-3 space-y-3">
@@ -3325,20 +3378,9 @@ export default function OrderPage() {
           ) : (
             <div className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <label className="inline-flex cursor-pointer items-center justify-center rounded-md border px-4 py-2 text-sm hover:bg-slate-50">
-                  {uploadingDocuments ? 'Uploading...' : 'Add document'}
-                  <input
-                    type="file"
-                    accept={ORDER_DOCUMENT_ACCEPT_ATTRIBUTE}
-                    multiple
-                    className="hidden"
-                    disabled={uploadingDocuments}
-                    onChange={(e) => {
-                      void uploadOrderDocuments(e.target.files);
-                      e.currentTarget.value = '';
-                      }}
-                    />
-                  </label>
+                <div className="text-sm text-slate-500">
+                  Shared document zones for this order.
+                </div>
                 <button
                   type="button"
                   onClick={() => {
@@ -3350,63 +3392,108 @@ export default function OrderPage() {
                 </button>
               </div>
 
-              {orderDocuments.length === 0 ? (
-                <div className="rounded-xl border border-dashed p-6 text-center text-sm text-slate-500">
-                  No documents uploaded yet.
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {orderDocuments.map((document) => (
-                    <div
-                      key={document.id}
-                      className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 xl:flex-row xl:items-center xl:justify-between"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate font-medium text-slate-900">
-                          {document.original_file_name}
+              <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                {visibleDocumentZones.map((zone) => {
+                  const zoneDocuments = documentsByZone[zone];
+                  const canUploadIntoZone =
+                    zone !== 'order' || orderDocumentPermissions.can_upload_order_zone;
+
+                  return (
+                    <div key={zone} className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-sm font-semibold text-slate-900">
+                          {ORDER_DOCUMENT_ZONE_LABELS[zone]}
                         </div>
-                        <div className="text-sm text-slate-500">
-                          {formatOrderDocumentFileSize(document.file_size)}
-                          {' / '}
-                          {document.created_at
-                            ? new Date(document.created_at).toLocaleString()
-                            : '-'}
-                        </div>
-                        <div className="text-sm text-slate-500">
-                          Uploaded by {formatPerson(document.created_by_user)}
-                        </div>
+
+                        {canUploadIntoZone ? (
+                          <label className="inline-flex cursor-pointer items-center justify-center rounded-md border bg-white px-3 py-2 text-sm hover:bg-slate-50">
+                            {uploadingDocuments ? 'Uploading...' : 'Add file'}
+                            <input
+                              type="file"
+                              accept={ORDER_DOCUMENT_ACCEPT_ATTRIBUTE}
+                              multiple
+                              className="hidden"
+                              disabled={uploadingDocuments}
+                              onChange={(e) => {
+                                void uploadOrderDocuments(zone, e.target.files);
+                                e.currentTarget.value = '';
+                              }}
+                            />
+                          </label>
+                        ) : (
+                          <div className="text-xs text-slate-500">
+                            Visible only to source organization
+                          </div>
+                        )}
                       </div>
 
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (document.signed_url) {
-                              window.open(
-                                document.signed_url,
-                                '_blank',
-                                'noopener,noreferrer'
-                              );
-                            }
-                          }}
-                          disabled={!document.signed_url}
-                          className="rounded-md border px-3 py-2 text-sm hover:bg-white disabled:opacity-50"
-                        >
-                          Open
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => deleteDocument(document.id)}
-                          disabled={deletingDocumentId === document.id}
-                          className="rounded-md border px-3 py-2 text-sm hover:bg-white disabled:opacity-50"
-                        >
-                          {deletingDocumentId === document.id ? 'Deleting...' : 'Delete'}
-                        </button>
+                      <div className="space-y-2">
+                        {zoneDocuments.length === 0 ? (
+                          <div className="rounded-lg border border-dashed bg-white px-3 py-4 text-center text-sm text-slate-500">
+                            {canUploadIntoZone
+                              ? 'No files uploaded yet.'
+                              : 'This zone is hidden for partner organizations.'}
+                          </div>
+                        ) : (
+                          zoneDocuments.map((document) => (
+                            <div
+                              key={document.id}
+                              className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-sm font-medium text-slate-900">
+                                  {document.original_file_name}
+                                </div>
+                                <div className="text-xs text-slate-500">
+                                  {formatOrderDocumentFileSize(document.file_size)}
+                                  {' / '}
+                                  {document.created_at
+                                    ? new Date(document.created_at).toLocaleString()
+                                    : '-'}
+                                </div>
+                                <div className="text-xs text-slate-500">
+                                  Uploaded by {formatPerson(document.created_by_user)}
+                                </div>
+                              </div>
+
+                              <div className="flex shrink-0 items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (document.signed_url) {
+                                      window.open(
+                                        document.signed_url,
+                                        '_blank',
+                                        'noopener,noreferrer'
+                                      );
+                                    }
+                                  }}
+                                  disabled={!document.signed_url}
+                                  className="rounded-md border px-2.5 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
+                                >
+                                  Open
+                                </button>
+                                {document.can_manage ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => deleteDocument(document.id)}
+                                    disabled={deletingDocumentId === document.id}
+                                    className="rounded-md border px-2.5 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
+                                  >
+                                    {deletingDocumentId === document.id
+                                      ? 'Deleting...'
+                                      : 'Delete'}
+                                  </button>
+                                ) : null}
+                              </div>
+                            </div>
+                          ))
+                        )}
                       </div>
                     </div>
-                  ))}
-                </div>
-              )}
+                  );
+                })}
+              </div>
             </div>
           )
         ) : tripOptionsLoading ? (
