@@ -37,6 +37,14 @@ export const ORDER_DOCUMENT_ZONE_LABELS: Record<OrderDocumentZone, string> = {
   additional: 'Additional documents / photos',
 };
 
+export const ORDER_DOCUMENT_ZONE_DESCRIPTIONS: Record<OrderDocumentZone, string> = {
+  order: 'Original order file from the source organization.',
+  customs_documents: 'EX1, T1, customs files, declarations, and broker documents.',
+  cmr: 'Signed or draft CMR documents for this cargo.',
+  cargo_photo: 'Cargo loading, unloading, damage, or checkpoint photos.',
+  additional: 'Any extra files, notes, scans, or supporting images.',
+};
+
 export const ORDER_DOCUMENT_ACCEPT_ATTRIBUTE =
   ORDER_DOCUMENT_ALLOWED_EXTENSIONS.join(',');
 

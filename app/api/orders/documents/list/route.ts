@@ -96,6 +96,27 @@ export async function GET(req: Request) {
       return isSameOrganization || documentZone !== 'order';
     });
 
+    const uploadedByOrganizationIds = Array.from(
+      new Set(
+        visibleDocuments
+          .map((document: any) => document.uploaded_by_organization_id)
+          .filter((value: string | null | undefined) => Boolean(value))
+      )
+    );
+
+    const uploadedByOrganizationMap = new Map<string, string>();
+
+    if (uploadedByOrganizationIds.length > 0) {
+      const { data: organizations } = await serviceSupabase
+        .from('organizations')
+        .select('id, name')
+        .in('id', uploadedByOrganizationIds);
+
+      for (const organization of organizations || []) {
+        uploadedByOrganizationMap.set(organization.id, organization.name || '-');
+      }
+    }
+
     const signedUrls = await Promise.all(
       visibleDocuments.map(async (document: any) => {
         const { data: signedUrlData } = await serviceSupabase.storage
@@ -110,6 +131,9 @@ export async function GET(req: Request) {
           file_size: document.file_size,
           document_zone: normalizeOrderDocumentZone(document.document_zone, 'order'),
           uploaded_by_organization_id: document.uploaded_by_organization_id ?? null,
+          uploaded_by_organization_name: document.uploaded_by_organization_id
+            ? uploadedByOrganizationMap.get(document.uploaded_by_organization_id) || '-'
+            : '-',
           created_at: document.created_at,
           signed_url: signedUrlData?.signedUrl ?? null,
           can_manage: canManageAll === true || document.created_by === user.id,

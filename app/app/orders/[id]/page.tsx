@@ -13,6 +13,7 @@ import {
 } from '@/lib/constants/cargo-leg-types';
 import {
   ORDER_DOCUMENT_ACCEPT_ATTRIBUTE,
+  ORDER_DOCUMENT_ZONE_DESCRIPTIONS,
   ORDER_DOCUMENT_ZONE_LABELS,
   ORDER_DOCUMENT_ZONES,
   formatOrderDocumentFileSize,
@@ -283,6 +284,8 @@ type OrderDocumentRow = {
   mime_type: string;
   file_size: number;
   document_zone: OrderDocumentZone;
+  uploaded_by_organization_id: string | null;
+  uploaded_by_organization_name: string;
   created_at: string | null;
   signed_url: string | null;
   can_manage: boolean;
@@ -3401,8 +3404,16 @@ export default function OrderPage() {
                   return (
                     <div key={zone} className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="text-sm font-semibold text-slate-900">
-                          {ORDER_DOCUMENT_ZONE_LABELS[zone]}
+                        <div>
+                          <div className="text-sm font-semibold text-slate-900">
+                            {ORDER_DOCUMENT_ZONE_LABELS[zone]}
+                            <span className="ml-2 text-xs font-medium text-slate-500">
+                              {zoneDocuments.length}
+                            </span>
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            {ORDER_DOCUMENT_ZONE_DESCRIPTIONS[zone]}
+                          </div>
                         </div>
 
                         {canUploadIntoZone ? (
@@ -3453,6 +3464,9 @@ export default function OrderPage() {
                                 </div>
                                 <div className="text-xs text-slate-500">
                                   Uploaded by {formatPerson(document.created_by_user)}
+                                </div>
+                                <div className="text-xs text-slate-500">
+                                  Organization: {document.uploaded_by_organization_name || '-'}
                                 </div>
                               </div>
 
