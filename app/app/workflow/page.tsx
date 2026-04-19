@@ -60,6 +60,7 @@ type WorkflowStandaloneRow = {
   open_order_id: string | null;
   open_trip_id: string | null;
   field_states: WorkflowFieldStateMap;
+  trip_editable_by_current_user?: boolean;
 };
 
 type WorkflowGroupFooter = {
@@ -90,6 +91,7 @@ type WorkflowGroup = {
   field_states: WorkflowFieldStateMap;
   rows: WorkflowStandaloneRow[];
   footer: WorkflowGroupFooter;
+  trip_editable_by_current_user?: boolean;
 };
 
 type WorkflowResponse = {
@@ -112,6 +114,13 @@ type ManagerOption = {
   id: string;
   first_name: string | null;
   last_name: string | null;
+};
+
+type WorkflowEditingCell = {
+  row_id: string;
+  record_type: 'order' | 'trip';
+  record_id: string;
+  field_key: WorkflowEditableFieldKey;
 };
 
 function formatStatusLabel(value: string | null | undefined) {
@@ -180,7 +189,10 @@ function CompactCell({
         {canAcknowledge && onAcknowledge ? (
           <button
             type="button"
-            onClick={onAcknowledge}
+            onClick={(event) => {
+              event.stopPropagation();
+              onAcknowledge();
+            }}
             className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full bg-emerald-500 p-0.5 text-white shadow-sm hover:bg-emerald-600"
             aria-label="Acknowledge field update"
             title="Acknowledge field update"
@@ -203,7 +215,10 @@ function CompactCell({
       {canAcknowledge && onAcknowledge ? (
         <button
           type="button"
-          onClick={onAcknowledge}
+          onClick={(event) => {
+            event.stopPropagation();
+            onAcknowledge();
+          }}
           className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full bg-emerald-500 p-0.5 text-white shadow-sm hover:bg-emerald-600"
           aria-label="Acknowledge field update"
           title="Acknowledge field update"
@@ -328,20 +343,63 @@ function WorkflowDisplayCell({
   scrollable = false,
   state,
   onAcknowledge,
+  editable = false,
+  onStartEdit,
+  isEditing = false,
+  editingValue = '',
+  onChangeEditingValue,
+  onSubmitEdit,
+  onCancelEdit,
 }: {
   value: string | null | undefined;
   scrollable?: boolean;
   state?: WorkflowFieldState | null;
   onAcknowledge?: (() => void) | null;
+  editable?: boolean;
+  onStartEdit?: (() => void) | null;
+  isEditing?: boolean;
+  editingValue?: string;
+  onChangeEditingValue?: ((value: string) => void) | null;
+  onSubmitEdit?: (() => void) | null;
+  onCancelEdit?: (() => void) | null;
 }) {
+  if (isEditing) {
+    return (
+      <input
+        autoFocus
+        value={editingValue}
+        onChange={(e) => onChangeEditingValue?.(e.target.value)}
+        onBlur={() => onSubmitEdit?.()}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            onSubmitEdit?.();
+          }
+
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            onCancelEdit?.();
+          }
+        }}
+        className="h-6 w-full rounded-md border border-sky-400 bg-white px-2 text-[11px] leading-none outline-none ring-1 ring-sky-200"
+      />
+    );
+  }
+
+  const wrapperClasses = editable
+    ? 'cursor-text'
+    : '';
+
   return (
-    <CompactCell
-      value={value}
-      scrollable={scrollable}
-      pendingAck={!!state?.pending_ack}
-      canAcknowledge={!!state?.pending_ack && !!onAcknowledge}
-      onAcknowledge={onAcknowledge || null}
-    />
+    <div className={wrapperClasses} onClick={editable ? onStartEdit || undefined : undefined}>
+      <CompactCell
+        value={value}
+        scrollable={scrollable}
+        pendingAck={!!state?.pending_ack}
+        canAcknowledge={!!state?.pending_ack && !!onAcknowledge}
+        onAcknowledge={onAcknowledge || null}
+      />
+    </div>
   );
 }
 
@@ -351,6 +409,12 @@ function WorkflowStandaloneRowView({
   onOpenTrip,
   onAcknowledgeField,
   allowAcknowledge,
+  editingCell,
+  editingValue,
+  onStartEdit,
+  onChangeEditingValue,
+  onSubmitEdit,
+  onCancelEdit,
 }: {
   row: WorkflowStandaloneRow;
   onOpenOrder: (orderId: string) => void;
@@ -361,6 +425,15 @@ function WorkflowStandaloneRowView({
     fieldKey: WorkflowEditableFieldKey
   ) => void;
   allowAcknowledge: boolean;
+  editingCell: WorkflowEditingCell | null;
+  editingValue: string;
+  onStartEdit: (
+    cell: WorkflowEditingCell,
+    initialValue: string | null | undefined
+  ) => void;
+  onChangeEditingValue: (value: string) => void;
+  onSubmitEdit: () => void;
+  onCancelEdit: () => void;
 }) {
   const acknowledge = (
     state: WorkflowFieldState | null | undefined
@@ -368,6 +441,39 @@ function WorkflowStandaloneRowView({
     state && allowAcknowledge
       ? () => onAcknowledgeField(state.record_type, state.record_id, state.field_key)
       : null;
+
+  const orderFieldCell = (fieldKey: WorkflowEditableFieldKey) =>
+    row.order_id
+      ? {
+          row_id: row.id,
+          record_type: 'order' as const,
+          record_id: row.order_id,
+          field_key: fieldKey,
+        }
+      : null;
+
+  const tripFieldCell = (fieldKey: WorkflowEditableFieldKey) =>
+    row.trip_id
+      ? {
+          row_id: row.id,
+          record_type: 'trip' as const,
+          record_id: row.trip_id,
+          field_key: fieldKey,
+        }
+      : null;
+
+  const matchesEditingCell = (cell: WorkflowEditingCell | null) =>
+    !!cell &&
+    !!editingCell &&
+    cell.row_id === editingCell.row_id &&
+    cell.record_type === editingCell.record_type &&
+    cell.record_id === editingCell.record_id &&
+    cell.field_key === editingCell.field_key;
+
+  const canEditTripOwnedField =
+    allowAcknowledge && !!row.trip_editable_by_current_user && !!row.trip_id;
+  const canEditOrderField = allowAcknowledge && !!row.order_id;
+  const canEditTripField = allowAcknowledge && row.row_type === 'trip_row' && !!row.trip_id;
 
   return (
     <tr className="border-b hover:bg-slate-50">
@@ -393,12 +499,24 @@ function WorkflowStandaloneRowView({
         />
       </td>
       <td className="px-2 py-1.5">
+        {(() => {
+          const cell = orderFieldCell('contact') ?? (canEditTripField ? tripFieldCell('contact') : null);
+          return (
         <WorkflowDisplayCell
           value={row.contact_display}
           scrollable
           state={row.field_states.contact}
           onAcknowledge={acknowledge(row.field_states.contact)}
+          editable={!!cell}
+          onStartEdit={cell ? () => onStartEdit(cell, row.contact_display) : null}
+          isEditing={matchesEditingCell(cell)}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
         />
+          );
+        })()}
       </td>
       <td className="px-2 py-1.5">
         <WorkflowDisplayCell
@@ -406,6 +524,17 @@ function WorkflowStandaloneRowView({
           scrollable
           state={row.field_states.sender}
           onAcknowledge={acknowledge(row.field_states.sender)}
+          editable={canEditOrderField}
+          onStartEdit={
+            canEditOrderField
+              ? () => onStartEdit(orderFieldCell('sender')!, row.shipper_name)
+              : null
+          }
+          isEditing={matchesEditingCell(orderFieldCell('sender'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
         />
       </td>
       <td className="px-2 py-1.5">
@@ -414,6 +543,21 @@ function WorkflowStandaloneRowView({
           scrollable
           state={row.field_states.loading}
           onAcknowledge={acknowledge(row.field_states.loading)}
+          editable={canEditOrderField}
+          onStartEdit={
+            canEditOrderField
+              ? () =>
+                  onStartEdit(
+                    orderFieldCell('loading')!,
+                    buildLocationCell(row.loading_display, row.loading_extra)
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(orderFieldCell('loading'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
         />
       </td>
       <td className="px-2 py-1.5">
@@ -422,6 +566,21 @@ function WorkflowStandaloneRowView({
           scrollable
           state={row.field_states.loading_customs}
           onAcknowledge={acknowledge(row.field_states.loading_customs)}
+          editable={canEditOrderField}
+          onStartEdit={
+            canEditOrderField
+              ? () =>
+                  onStartEdit(
+                    orderFieldCell('loading_customs')!,
+                    row.loading_customs_display
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(orderFieldCell('loading_customs'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
         />
       </td>
       <td className="px-2 py-1.5">
@@ -430,6 +589,17 @@ function WorkflowStandaloneRowView({
           scrollable
           state={row.field_states.receiver}
           onAcknowledge={acknowledge(row.field_states.receiver)}
+          editable={canEditOrderField}
+          onStartEdit={
+            canEditOrderField
+              ? () => onStartEdit(orderFieldCell('receiver')!, row.consignee_name)
+              : null
+          }
+          isEditing={matchesEditingCell(orderFieldCell('receiver'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
         />
       </td>
       <td className="px-2 py-1.5">
@@ -438,6 +608,21 @@ function WorkflowStandaloneRowView({
           scrollable
           state={row.field_states.unloading}
           onAcknowledge={acknowledge(row.field_states.unloading)}
+          editable={canEditOrderField}
+          onStartEdit={
+            canEditOrderField
+              ? () =>
+                  onStartEdit(
+                    orderFieldCell('unloading')!,
+                    buildLocationCell(row.unloading_display, row.unloading_extra)
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(orderFieldCell('unloading'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
         />
       </td>
       <td className="px-2 py-1.5">
@@ -446,6 +631,21 @@ function WorkflowStandaloneRowView({
           scrollable
           state={row.field_states.unloading_customs}
           onAcknowledge={acknowledge(row.field_states.unloading_customs)}
+          editable={canEditOrderField}
+          onStartEdit={
+            canEditOrderField
+              ? () =>
+                  onStartEdit(
+                    orderFieldCell('unloading_customs')!,
+                    row.unloading_customs_display
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(orderFieldCell('unloading_customs'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
         />
       </td>
       <td className="px-2 py-1.5">
@@ -454,6 +654,17 @@ function WorkflowStandaloneRowView({
           scrollable
           state={row.field_states.cargo}
           onAcknowledge={acknowledge(row.field_states.cargo)}
+          editable={canEditOrderField}
+          onStartEdit={
+            canEditOrderField
+              ? () => onStartEdit(orderFieldCell('cargo')!, row.cargo_display)
+              : null
+          }
+          isEditing={matchesEditingCell(orderFieldCell('cargo'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
         />
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap">
@@ -461,6 +672,21 @@ function WorkflowStandaloneRowView({
           value={row.kg_display || formatNumberCell(row.cargo_kg)}
           state={row.field_states.kg}
           onAcknowledge={acknowledge(row.field_states.kg)}
+          editable={canEditOrderField}
+          onStartEdit={
+            canEditOrderField
+              ? () =>
+                  onStartEdit(
+                    orderFieldCell('kg')!,
+                    row.kg_display || formatNumberCell(row.cargo_kg)
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(orderFieldCell('kg'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
         />
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap">
@@ -468,6 +694,21 @@ function WorkflowStandaloneRowView({
           value={row.ldm_display || formatNumberCell(row.cargo_ldm)}
           state={row.field_states.ldm}
           onAcknowledge={acknowledge(row.field_states.ldm)}
+          editable={canEditOrderField}
+          onStartEdit={
+            canEditOrderField
+              ? () =>
+                  onStartEdit(
+                    orderFieldCell('ldm')!,
+                    row.ldm_display || formatNumberCell(row.cargo_ldm)
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(orderFieldCell('ldm'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
         />
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap">
@@ -475,6 +716,21 @@ function WorkflowStandaloneRowView({
           value={formatMoneyCell(row.revenue_display)}
           state={row.field_states.revenue}
           onAcknowledge={acknowledge(row.field_states.revenue)}
+          editable={canEditOrderField}
+          onStartEdit={
+            canEditOrderField
+              ? () =>
+                  onStartEdit(
+                    orderFieldCell('revenue')!,
+                    formatMoneyCell(row.revenue_display)
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(orderFieldCell('revenue'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
         />
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap">
@@ -482,6 +738,21 @@ function WorkflowStandaloneRowView({
           value={formatMoneyCell(row.cost_display)}
           state={row.field_states.cost}
           onAcknowledge={acknowledge(row.field_states.cost)}
+          editable={canEditTripOwnedField}
+          onStartEdit={
+            canEditTripOwnedField
+              ? () =>
+                  onStartEdit(
+                    tripFieldCell('cost')!,
+                    formatMoneyCell(row.cost_display)
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(tripFieldCell('cost'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
         />
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap">
@@ -489,6 +760,30 @@ function WorkflowStandaloneRowView({
           value={formatMoneyCell(row.profit_display)}
           state={row.field_states.profit}
           onAcknowledge={acknowledge(row.field_states.profit)}
+          editable={canEditOrderField || canEditTripField}
+          onStartEdit={
+            canEditOrderField
+              ? () =>
+                  onStartEdit(
+                    orderFieldCell('profit')!,
+                    formatMoneyCell(row.profit_display)
+                  )
+              : canEditTripField
+                ? () =>
+                    onStartEdit(
+                      tripFieldCell('profit')!,
+                      formatMoneyCell(row.profit_display)
+                    )
+                : null
+          }
+          isEditing={
+            matchesEditingCell(orderFieldCell('profit')) ||
+            matchesEditingCell(tripFieldCell('profit'))
+          }
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
         />
       </td>
       <td className="px-2 py-1.5">
@@ -501,6 +796,23 @@ function WorkflowStandaloneRowView({
           scrollable
           state={row.field_states.trip_vehicle}
           onAcknowledge={acknowledge(row.field_states.trip_vehicle)}
+          editable={canEditTripOwnedField}
+          onStartEdit={
+            canEditTripOwnedField
+              ? () =>
+                  onStartEdit(
+                    tripFieldCell('trip_vehicle')!,
+                    [row.trip_display, row.trip_status ? formatStatusLabel(row.trip_status) : '', row.vehicle_display]
+                      .filter((value) => value && value !== '-')
+                      .join(' / ') || '-'
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(tripFieldCell('trip_vehicle'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
         />
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap">
@@ -521,6 +833,12 @@ function GroupageBlock({
   onOpenTrip,
   onAcknowledgeField,
   allowAcknowledge,
+  editingCell,
+  editingValue,
+  onStartEdit,
+  onChangeEditingValue,
+  onSubmitEdit,
+  onCancelEdit,
 }: {
   group: WorkflowGroup;
   onOpenOrder: (orderId: string) => void;
@@ -531,6 +849,15 @@ function GroupageBlock({
     fieldKey: WorkflowEditableFieldKey
   ) => void;
   allowAcknowledge: boolean;
+  editingCell: WorkflowEditingCell | null;
+  editingValue: string;
+  onStartEdit: (
+    cell: WorkflowEditingCell,
+    initialValue: string | null | undefined
+  ) => void;
+  onChangeEditingValue: (value: string) => void;
+  onSubmitEdit: () => void;
+  onCancelEdit: () => void;
 }) {
   const acknowledge = (
     state: WorkflowFieldState | null | undefined
@@ -538,6 +865,31 @@ function GroupageBlock({
     state && allowAcknowledge
       ? () => onAcknowledgeField(state.record_type, state.record_id, state.field_key)
       : null;
+
+  const canEditTripField =
+    allowAcknowledge && !!group.trip_editable_by_current_user;
+
+  const groupHeaderCell = (fieldKey: WorkflowEditableFieldKey): WorkflowEditingCell => ({
+    row_id: group.id,
+    record_type: 'trip',
+    record_id: group.trip_id,
+    field_key: fieldKey,
+  });
+
+  const groupFooterCell = (fieldKey: WorkflowEditableFieldKey): WorkflowEditingCell => ({
+    row_id: group.footer.id,
+    record_type: 'trip',
+    record_id: group.trip_id,
+    field_key: fieldKey,
+  });
+
+  const matchesEditingCell = (cell: WorkflowEditingCell | null) =>
+    !!cell &&
+    !!editingCell &&
+    cell.row_id === editingCell.row_id &&
+    cell.record_type === editingCell.record_type &&
+    cell.record_id === editingCell.record_id &&
+    cell.field_key === editingCell.field_key;
 
   return (
     <div className="overflow-x-auto rounded-xl border">
@@ -565,6 +917,17 @@ function GroupageBlock({
                 scrollable
                 state={group.field_states.contact}
                 onAcknowledge={acknowledge(group.field_states.contact)}
+                editable={canEditTripField}
+                onStartEdit={
+                  canEditTripField
+                    ? () => onStartEdit(groupHeaderCell('contact'), group.responsible_display)
+                    : null
+                }
+                isEditing={matchesEditingCell(groupHeaderCell('contact'))}
+                editingValue={editingValue}
+                onChangeEditingValue={onChangeEditingValue}
+                onSubmitEdit={onSubmitEdit}
+                onCancelEdit={onCancelEdit}
               />
             </td>
               <td className="px-2 py-1"><CompactCell value="-" /></td>
@@ -584,6 +947,17 @@ function GroupageBlock({
                 value={formatMoneyCell(group.cost_display)}
                 state={group.field_states.cost}
                 onAcknowledge={acknowledge(group.field_states.cost)}
+                editable={canEditTripField}
+                onStartEdit={
+                  canEditTripField
+                    ? () => onStartEdit(groupHeaderCell('cost'), formatMoneyCell(group.cost_display))
+                    : null
+                }
+                isEditing={matchesEditingCell(groupHeaderCell('cost'))}
+                editingValue={editingValue}
+                onChangeEditingValue={onChangeEditingValue}
+                onSubmitEdit={onSubmitEdit}
+                onCancelEdit={onCancelEdit}
               />
             </td>
             <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
@@ -593,6 +967,17 @@ function GroupageBlock({
                 scrollable
                 state={group.field_states.trip_vehicle}
                 onAcknowledge={acknowledge(group.field_states.trip_vehicle)}
+                editable={canEditTripField}
+                onStartEdit={
+                  canEditTripField
+                    ? () => onStartEdit(groupHeaderCell('trip_vehicle'), group.vehicle_display)
+                    : null
+                }
+                isEditing={matchesEditingCell(groupHeaderCell('trip_vehicle'))}
+                editingValue={editingValue}
+                onChangeEditingValue={onChangeEditingValue}
+                onSubmitEdit={onSubmitEdit}
+                onCancelEdit={onCancelEdit}
               />
             </td>
             <td className="px-2 py-1 whitespace-nowrap">
@@ -613,6 +998,12 @@ function GroupageBlock({
               onOpenTrip={onOpenTrip}
               onAcknowledgeField={onAcknowledgeField}
               allowAcknowledge={allowAcknowledge}
+              editingCell={editingCell}
+              editingValue={editingValue}
+              onStartEdit={onStartEdit}
+              onChangeEditingValue={onChangeEditingValue}
+              onSubmitEdit={onSubmitEdit}
+              onCancelEdit={onCancelEdit}
             />
           ))}
 
@@ -645,6 +1036,21 @@ function GroupageBlock({
                 value={formatMoneyCell(group.footer.cost_display)}
                 state={group.footer.field_states.cost}
                 onAcknowledge={acknowledge(group.footer.field_states.cost)}
+                editable={canEditTripField}
+                onStartEdit={
+                  canEditTripField
+                    ? () =>
+                        onStartEdit(
+                          groupFooterCell('cost'),
+                          formatMoneyCell(group.footer.cost_display)
+                        )
+                    : null
+                }
+                isEditing={matchesEditingCell(groupFooterCell('cost'))}
+                editingValue={editingValue}
+                onChangeEditingValue={onChangeEditingValue}
+                onSubmitEdit={onSubmitEdit}
+                onCancelEdit={onCancelEdit}
               />
             </td>
             <td className="px-2 py-1 whitespace-nowrap">
@@ -652,6 +1058,21 @@ function GroupageBlock({
                 value={formatMoneyCell(group.footer.profit_display)}
                 state={group.footer.field_states.profit}
                 onAcknowledge={acknowledge(group.footer.field_states.profit)}
+                editable={canEditTripField}
+                onStartEdit={
+                  canEditTripField
+                    ? () =>
+                        onStartEdit(
+                          groupFooterCell('profit'),
+                          formatMoneyCell(group.footer.profit_display)
+                        )
+                    : null
+                }
+                isEditing={matchesEditingCell(groupFooterCell('profit'))}
+                editingValue={editingValue}
+                onChangeEditingValue={onChangeEditingValue}
+                onSubmitEdit={onSubmitEdit}
+                onCancelEdit={onCancelEdit}
               />
             </td>
             <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
@@ -680,6 +1101,9 @@ export default function WorkflowPage() {
   const [selectedManagerUserId, setSelectedManagerUserId] = useState('');
   const [loadingOrganizations, setLoadingOrganizations] = useState(false);
   const [loadingManagers, setLoadingManagers] = useState(false);
+  const [editingCell, setEditingCell] = useState<WorkflowEditingCell | null>(null);
+  const [editingValue, setEditingValue] = useState('');
+  const [savingField, setSavingField] = useState(false);
 
   useEffect(() => {
     void fetchWorkflow();
@@ -793,6 +1217,17 @@ export default function WorkflowPage() {
     }
   };
 
+  const buildReloadParams = () =>
+    viewerIsElevated
+      ? {
+          organizationId: selectedOrganizationId || undefined,
+          managerUserId: selectedManagerUserId || undefined,
+        }
+      : {
+          organizationId: undefined,
+          managerUserId: undefined,
+        };
+
   const canAcknowledgeWorkflow =
     !!viewerUserId &&
     !!effectiveManagerUserId &&
@@ -828,11 +1263,74 @@ export default function WorkflowPage() {
       }
 
       await fetchWorkflow(
-        viewerIsElevated ? selectedOrganizationId : undefined,
-        viewerIsElevated ? selectedManagerUserId : undefined
+        buildReloadParams().organizationId,
+        buildReloadParams().managerUserId
       );
     } catch (error) {
       toast.error('Failed to acknowledge field update');
+    }
+  };
+
+  const startEditingCell = (
+    cell: WorkflowEditingCell,
+    initialValue: string | null | undefined
+  ) => {
+    if (savingField) {
+      return;
+    }
+
+    setEditingCell(cell);
+    setEditingValue(initialValue && initialValue !== '-' ? initialValue : '');
+  };
+
+  const cancelEditingCell = () => {
+    if (savingField) {
+      return;
+    }
+
+    setEditingCell(null);
+    setEditingValue('');
+  };
+
+  const submitEditingCell = async () => {
+    if (!editingCell || savingField) {
+      return;
+    }
+
+    try {
+      setSavingField(true);
+
+      const response = await fetch('/api/workflow/field/update', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          record_type: editingCell.record_type,
+          record_id: editingCell.record_id,
+          field_key: editingCell.field_key,
+          value_text: editingValue.trim() === '' ? null : editingValue.trim(),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        toast.error(data.error || 'Failed to save workflow field');
+        return;
+      }
+
+      setEditingCell(null);
+      setEditingValue('');
+
+      await fetchWorkflow(
+        buildReloadParams().organizationId,
+        buildReloadParams().managerUserId
+      );
+    } catch (error) {
+      toast.error('Failed to save workflow field');
+    } finally {
+      setSavingField(false);
     }
   };
 
@@ -1070,6 +1568,12 @@ export default function WorkflowPage() {
                 onOpenTrip={(tripId) => router.push(`/app/trips/${tripId}`)}
                 onAcknowledgeField={acknowledgeWorkflowField}
                 allowAcknowledge={canAcknowledgeWorkflow}
+                editingCell={editingCell}
+                editingValue={editingValue}
+                onStartEdit={startEditingCell}
+                onChangeEditingValue={setEditingValue}
+                onSubmitEdit={submitEditingCell}
+                onCancelEdit={cancelEditingCell}
               />
             ))}
 
@@ -1086,6 +1590,12 @@ export default function WorkflowPage() {
                         onOpenTrip={(tripId) => router.push(`/app/trips/${tripId}`)}
                         onAcknowledgeField={acknowledgeWorkflowField}
                         allowAcknowledge={canAcknowledgeWorkflow}
+                        editingCell={editingCell}
+                        editingValue={editingValue}
+                        onStartEdit={startEditingCell}
+                        onChangeEditingValue={setEditingValue}
+                        onSubmitEdit={submitEditingCell}
+                        onCancelEdit={cancelEditingCell}
                       />
                     ))}
                   </tbody>

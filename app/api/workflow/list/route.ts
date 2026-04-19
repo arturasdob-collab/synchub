@@ -410,9 +410,16 @@ function buildOrderRow(params: {
   effectiveOrganizationId: string;
   sourceOrganizationMap: Map<string, { name: string | null }>;
   linkedTrip: any | null;
+  currentUserId: string;
   kind?: 'Order' | 'Groupage cargo';
 }) {
-  const { order, effectiveOrganizationId, sourceOrganizationMap, linkedTrip } = params;
+  const {
+    order,
+    effectiveOrganizationId,
+    sourceOrganizationMap,
+    linkedTrip,
+    currentUserId,
+  } = params;
   const client = Array.isArray(order.client) ? order.client[0] ?? null : order.client;
   const createdByUser = Array.isArray(order.created_by_user)
     ? order.created_by_user[0] ?? null
@@ -484,6 +491,8 @@ function buildOrderRow(params: {
     open_order_id: order.id,
     open_trip_id: linkedTrip?.id ?? null,
     field_states: {},
+    trip_editable_by_current_user:
+      !!linkedTrip?.id && linkedTrip?.created_by === currentUserId,
   };
 }
 
@@ -492,8 +501,15 @@ function buildTripRow(params: {
   effectiveOrganizationId: string;
   relatedOrder: any | null;
   sourceOrganizationMap: Map<string, { name: string | null }>;
+  currentUserId: string;
 }) {
-  const { trip, effectiveOrganizationId, relatedOrder, sourceOrganizationMap } = params;
+  const {
+    trip,
+    effectiveOrganizationId,
+    relatedOrder,
+    sourceOrganizationMap,
+    currentUserId,
+  } = params;
   const carrier = Array.isArray(trip.carrier) ? trip.carrier[0] ?? null : trip.carrier;
   const createdByUser = Array.isArray(trip.created_by_user)
     ? trip.created_by_user[0] ?? null
@@ -568,6 +584,7 @@ function buildTripRow(params: {
     open_order_id: relatedOrder?.id ?? null,
     open_trip_id: trip.id,
     field_states: {},
+    trip_editable_by_current_user: trip.created_by === currentUserId,
     source_organization_name:
       relatedOrder?.organization_id && relatedOrder.organization_id !== effectiveOrganizationId
         ? sourceOrganizationMap.get(relatedOrder.organization_id)?.name || '-'
@@ -741,24 +758,43 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const [orderFieldUpdates, tripFieldUpdates] = await Promise.all([
-      loadWorkflowFieldUpdates(serviceSupabase, {
-        recordType: 'order',
-        recordIds: Array.from(orderMap.keys()),
-      }),
-      loadWorkflowFieldUpdates(serviceSupabase, {
-        recordType: 'trip',
-        recordIds: Array.from(tripMap.keys()),
-      }),
-    ]);
+    let orderFieldUpdates = new Map<string, any>();
+    let tripFieldUpdates = new Map<string, any>();
+    let workflowReceipts = new Map<string, any>();
 
-    const workflowReceipts = await loadWorkflowFieldReceiptsForUser(serviceSupabase, {
-      fieldUpdateIds: [
-        ...Array.from(orderFieldUpdates.values()).map((update) => update.id),
-        ...Array.from(tripFieldUpdates.values()).map((update) => update.id),
-      ],
-      userId: user.id,
-    });
+    try {
+      [orderFieldUpdates, tripFieldUpdates] = await Promise.all([
+        loadWorkflowFieldUpdates(serviceSupabase, {
+          recordType: 'order',
+          recordIds: Array.from(orderMap.keys()),
+        }),
+        loadWorkflowFieldUpdates(serviceSupabase, {
+          recordType: 'trip',
+          recordIds: Array.from(tripMap.keys()),
+        }),
+      ]);
+
+      workflowReceipts = await loadWorkflowFieldReceiptsForUser(serviceSupabase, {
+        fieldUpdateIds: [
+          ...Array.from(orderFieldUpdates.values()).map((update) => update.id),
+          ...Array.from(tripFieldUpdates.values()).map((update) => update.id),
+        ],
+        userId: user.id,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+
+      if (
+        message.includes('workflow_field_updates') ||
+        message.includes('workflow_field_update_receipts')
+      ) {
+        orderFieldUpdates = new Map<string, any>();
+        tripFieldUpdates = new Map<string, any>();
+        workflowReceipts = new Map<string, any>();
+      } else {
+        throw error;
+      }
+    }
 
     const getWorkflowFieldState = (
       recordType: WorkflowRecordType,
@@ -867,30 +903,50 @@ export async function GET(req: NextRequest) {
       return nextRow;
     };
 
-    const applyTripWorkflowStatesToRow = (row: any) => {
+    const applyTripWorkflowStatesToRow = (
+      row: any,
+      options?: {
+        includeContact?: boolean;
+        includeCost?: boolean;
+        includeProfit?: boolean;
+        includeTripVehicle?: boolean;
+      }
+    ) => {
       const nextRow = { ...row, field_states: { ...(row.field_states || {}) } };
       const tripRecordId = row.trip_id as string | null;
 
-      const contactState = getWorkflowFieldState('trip', tripRecordId, 'contact');
+      const contactState =
+        options?.includeContact
+          ? getWorkflowFieldState('trip', tripRecordId, 'contact')
+          : null;
       if (contactState) {
         nextRow.contact_display = contactState.value_text || '-';
         nextRow.field_states.contact = contactState;
       }
 
-      const costState = getWorkflowFieldState('trip', tripRecordId, 'cost');
+      const costState =
+        options?.includeCost
+          ? getWorkflowFieldState('trip', tripRecordId, 'cost')
+          : null;
       if (costState) {
         nextRow.cost_display = costState.value_text || '-';
         nextRow.cost_value = parseNumericText(costState.value_text);
         nextRow.field_states.cost = costState;
       }
 
-      const tripVehicleState = getWorkflowFieldState('trip', tripRecordId, 'trip_vehicle');
+      const tripVehicleState =
+        options?.includeTripVehicle
+          ? getWorkflowFieldState('trip', tripRecordId, 'trip_vehicle')
+          : null;
       if (tripVehicleState) {
         nextRow.vehicle_display = tripVehicleState.value_text || '-';
         nextRow.field_states.trip_vehicle = tripVehicleState;
       }
 
-      const profitState = getWorkflowFieldState('trip', tripRecordId, 'profit');
+      const profitState =
+        options?.includeProfit
+          ? getWorkflowFieldState('trip', tripRecordId, 'profit')
+          : null;
       if (profitState) {
         nextRow.profit_display = profitState.value_text || '-';
         nextRow.profit_value = parseNumericText(profitState.value_text);
@@ -947,9 +1003,14 @@ export async function GET(req: NextRequest) {
               effectiveOrganizationId,
               sourceOrganizationMap,
               linkedTrip: trip,
+              currentUserId: user.id,
               kind: 'Groupage cargo',
             })
-          )
+          ),
+          {
+            includeCost: true,
+            includeTripVehicle: true,
+          }
         )
       );
 
@@ -1066,8 +1127,13 @@ export async function GET(req: NextRequest) {
               effectiveOrganizationId,
               sourceOrganizationMap,
               linkedTrip,
+              currentUserId: user.id,
             })
-          )
+          ),
+          {
+            includeCost: true,
+            includeTripVehicle: true,
+          }
         )
       );
     }
@@ -1094,8 +1160,15 @@ export async function GET(req: NextRequest) {
               effectiveOrganizationId,
               relatedOrder: firstLinkedOrder,
               sourceOrganizationMap,
+              currentUserId: user.id,
             })
-          )
+          ),
+          {
+            includeContact: true,
+            includeCost: true,
+            includeProfit: true,
+            includeTripVehicle: true,
+          }
         )
       );
     }
