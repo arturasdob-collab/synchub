@@ -5,7 +5,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { AuthProvider, useAuth } from '@/lib/auth/AuthProvider';
 import { Button } from '@/components/ui/button';
-import { LayoutDashboard, Users, Settings, Menu, Building2, FileText, LogOut, ShieldCheck, Truck } from 'lucide-react';
+import { LayoutDashboard, Users, Settings, Menu, Building2, FileText, LogOut, ShieldCheck, Truck, GitBranch } from 'lucide-react';
 import { useState } from 'react';
 import { AdminGuard } from './AdminGuard';
 
@@ -72,12 +72,14 @@ function AppLayoutContent({ children }: { children: React.ReactNode }) {
         { name: 'Dashboard', href: '/app', icon: LayoutDashboard },
         { name: 'Orders', href: '/app/orders', icon: FileText },
         { name: 'Trips', href: '/app/trips', icon: Truck },
+        { name: 'Workflow', href: '/app/workflow', icon: GitBranch },
       ]
     : [
         { name: 'Dashboard', href: '/app', icon: LayoutDashboard },
         { name: 'Companies', href: '/app/companies', icon: Building2 },
         { name: 'Orders', href: '/app/orders', icon: FileText },
         { name: 'Trips', href: '/app/trips', icon: Truck },
+        { name: 'Workflow', href: '/app/workflow', icon: GitBranch },
       ];
 
 const canViewAuditLog =
