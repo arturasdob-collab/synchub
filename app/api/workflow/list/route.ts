@@ -11,8 +11,27 @@ import {
   loadCargoVisibleTripIds,
 } from '@/lib/server/cargo-legs';
 import { CARGO_LEG_TYPE_LABELS, type CargoLegType } from '@/lib/constants/cargo-leg-types';
+import {
+  buildWorkflowFieldCompositeKey,
+  loadWorkflowFieldReceiptsForUser,
+  loadWorkflowFieldUpdates,
+} from '@/lib/server/workflow-field-updates';
+import type { WorkflowEditableFieldKey, WorkflowRecordType } from '@/lib/constants/workflow-fields';
 
 type ServiceSupabase = any;
+
+type WorkflowFieldState = {
+  update_id: string;
+  record_type: WorkflowRecordType;
+  record_id: string;
+  field_key: WorkflowEditableFieldKey;
+  value_text: string | null;
+  revision: number;
+  pending_ack: boolean;
+  acknowledged: boolean;
+  updated_by_current_user: boolean;
+  has_override: boolean;
+};
 
 const orderSelect = `
   id,
@@ -144,6 +163,74 @@ function formatMoney(value: number | null | undefined, currency = 'EUR') {
   }
 
   return `${value} ${currency}`;
+}
+
+function formatNumericValue(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return null;
+  }
+
+  return `${value}`;
+}
+
+function parseNumericText(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.replace(',', '.');
+  const match = normalized.match(/-?\d+(?:\.\d+)?/);
+
+  if (!match) {
+    return null;
+  }
+
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildWorkflowFieldState(params: {
+  updates: Map<string, any>;
+  receipts: Map<string, any>;
+  currentUserId: string;
+  recordType: WorkflowRecordType;
+  recordId: string | null | undefined;
+  fieldKey: WorkflowEditableFieldKey;
+}) {
+  if (!params.recordId) {
+    return null;
+  }
+
+  const update = params.updates.get(
+    buildWorkflowFieldCompositeKey({
+      recordType: params.recordType,
+      recordId: params.recordId,
+      fieldKey: params.fieldKey,
+    })
+  );
+
+  if (!update) {
+    return null;
+  }
+
+  const receipt = params.receipts.get(update.id);
+  const updatedByCurrentUser = update.updated_by === params.currentUserId;
+  const acknowledged =
+    updatedByCurrentUser ||
+    ((receipt?.seen_revision as number | undefined) ?? 0) >= update.revision;
+
+  return {
+    update_id: update.id,
+    record_type: params.recordType,
+    record_id: params.recordId,
+    field_key: params.fieldKey,
+    value_text: update.value_text,
+    revision: update.revision,
+    pending_ack: !acknowledged,
+    acknowledged,
+    updated_by_current_user: updatedByCurrentUser,
+    has_override: true,
+  } satisfies WorkflowFieldState;
 }
 
 async function loadVisibleOrderIdsForManager(
@@ -382,7 +469,9 @@ function buildOrderRow(params: {
     unloading_customs_display: formatExtraInfo([order.unloading_customs_info]),
     cargo_display: buildCargoSummary(order),
     cargo_kg: order.cargo_kg ?? null,
+    kg_display: formatNumericValue(order.cargo_kg),
     cargo_ldm: order.cargo_ldm ?? null,
+    ldm_display: formatNumericValue(order.cargo_ldm),
     revenue_value: revenueValue,
     revenue_display: formatMoney(revenueValue, order.currency ?? 'EUR'),
     cost_value: costValue,
@@ -394,6 +483,7 @@ function buildOrderRow(params: {
     vehicle_display: linkedTrip ? buildVehicleSummary(linkedTrip) : '-',
     open_order_id: order.id,
     open_trip_id: linkedTrip?.id ?? null,
+    field_states: {},
   };
 }
 
@@ -463,7 +553,9 @@ function buildTripRow(params: {
       : '-',
     cargo_display: relatedOrder ? buildCargoSummary(relatedOrder) : '-',
     cargo_kg: relatedOrder?.cargo_kg ?? null,
+    kg_display: formatNumericValue(relatedOrder?.cargo_kg ?? null),
     cargo_ldm: relatedOrder?.cargo_ldm ?? null,
+    ldm_display: formatNumericValue(relatedOrder?.cargo_ldm ?? null),
     revenue_value: revenueValue,
     revenue_display: formatMoney(revenueValue, relatedOrder?.currency ?? 'EUR'),
     cost_value: costValue,
@@ -475,6 +567,7 @@ function buildTripRow(params: {
     vehicle_display: buildVehicleSummary(trip),
     open_order_id: relatedOrder?.id ?? null,
     open_trip_id: trip.id,
+    field_states: {},
     source_organization_name:
       relatedOrder?.organization_id && relatedOrder.organization_id !== effectiveOrganizationId
         ? sourceOrganizationMap.get(relatedOrder.organization_id)?.name || '-'
@@ -648,6 +741,165 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    const [orderFieldUpdates, tripFieldUpdates] = await Promise.all([
+      loadWorkflowFieldUpdates(serviceSupabase, {
+        recordType: 'order',
+        recordIds: Array.from(orderMap.keys()),
+      }),
+      loadWorkflowFieldUpdates(serviceSupabase, {
+        recordType: 'trip',
+        recordIds: Array.from(tripMap.keys()),
+      }),
+    ]);
+
+    const workflowReceipts = await loadWorkflowFieldReceiptsForUser(serviceSupabase, {
+      fieldUpdateIds: [
+        ...Array.from(orderFieldUpdates.values()).map((update) => update.id),
+        ...Array.from(tripFieldUpdates.values()).map((update) => update.id),
+      ],
+      userId: user.id,
+    });
+
+    const getWorkflowFieldState = (
+      recordType: WorkflowRecordType,
+      recordId: string | null | undefined,
+      fieldKey: WorkflowEditableFieldKey
+    ) =>
+      buildWorkflowFieldState({
+        updates: recordType === 'order' ? orderFieldUpdates : tripFieldUpdates,
+        receipts: workflowReceipts,
+        currentUserId: user.id,
+        recordType,
+        recordId,
+        fieldKey,
+      });
+
+    const applyOrderWorkflowStatesToRow = (row: any) => {
+      const nextRow = { ...row, field_states: { ...(row.field_states || {}) } };
+      const orderRecordId = row.order_id as string | null;
+
+      const contactState = getWorkflowFieldState('order', orderRecordId, 'contact');
+      if (contactState) {
+        nextRow.contact_display = contactState.value_text || '-';
+        nextRow.field_states.contact = contactState;
+      }
+
+      const senderState = getWorkflowFieldState('order', orderRecordId, 'sender');
+      if (senderState) {
+        nextRow.shipper_name = senderState.value_text || '-';
+        nextRow.field_states.sender = senderState;
+      }
+
+      const loadingState = getWorkflowFieldState('order', orderRecordId, 'loading');
+      if (loadingState) {
+        nextRow.loading_display = loadingState.value_text || '-';
+        nextRow.loading_extra = '';
+        nextRow.field_states.loading = loadingState;
+      }
+
+      const loadingCustomsState = getWorkflowFieldState(
+        'order',
+        orderRecordId,
+        'loading_customs'
+      );
+      if (loadingCustomsState) {
+        nextRow.loading_customs_display = loadingCustomsState.value_text || '-';
+        nextRow.field_states.loading_customs = loadingCustomsState;
+      }
+
+      const receiverState = getWorkflowFieldState('order', orderRecordId, 'receiver');
+      if (receiverState) {
+        nextRow.consignee_name = receiverState.value_text || '-';
+        nextRow.field_states.receiver = receiverState;
+      }
+
+      const unloadingState = getWorkflowFieldState('order', orderRecordId, 'unloading');
+      if (unloadingState) {
+        nextRow.unloading_display = unloadingState.value_text || '-';
+        nextRow.unloading_extra = '';
+        nextRow.field_states.unloading = unloadingState;
+      }
+
+      const unloadingCustomsState = getWorkflowFieldState(
+        'order',
+        orderRecordId,
+        'unloading_customs'
+      );
+      if (unloadingCustomsState) {
+        nextRow.unloading_customs_display = unloadingCustomsState.value_text || '-';
+        nextRow.field_states.unloading_customs = unloadingCustomsState;
+      }
+
+      const cargoState = getWorkflowFieldState('order', orderRecordId, 'cargo');
+      if (cargoState) {
+        nextRow.cargo_display = cargoState.value_text || '-';
+        nextRow.field_states.cargo = cargoState;
+      }
+
+      const kgState = getWorkflowFieldState('order', orderRecordId, 'kg');
+      if (kgState) {
+        nextRow.kg_display = kgState.value_text || '-';
+        nextRow.cargo_kg = parseNumericText(kgState.value_text);
+        nextRow.field_states.kg = kgState;
+      }
+
+      const ldmState = getWorkflowFieldState('order', orderRecordId, 'ldm');
+      if (ldmState) {
+        nextRow.ldm_display = ldmState.value_text || '-';
+        nextRow.cargo_ldm = parseNumericText(ldmState.value_text);
+        nextRow.field_states.ldm = ldmState;
+      }
+
+      const revenueState = getWorkflowFieldState('order', orderRecordId, 'revenue');
+      if (revenueState) {
+        nextRow.revenue_display = revenueState.value_text || '-';
+        nextRow.revenue_value = parseNumericText(revenueState.value_text);
+        nextRow.field_states.revenue = revenueState;
+      }
+
+      const profitState = getWorkflowFieldState('order', orderRecordId, 'profit');
+      if (profitState) {
+        nextRow.profit_display = profitState.value_text || '-';
+        nextRow.profit_value = parseNumericText(profitState.value_text);
+        nextRow.field_states.profit = profitState;
+      }
+
+      return nextRow;
+    };
+
+    const applyTripWorkflowStatesToRow = (row: any) => {
+      const nextRow = { ...row, field_states: { ...(row.field_states || {}) } };
+      const tripRecordId = row.trip_id as string | null;
+
+      const contactState = getWorkflowFieldState('trip', tripRecordId, 'contact');
+      if (contactState) {
+        nextRow.contact_display = contactState.value_text || '-';
+        nextRow.field_states.contact = contactState;
+      }
+
+      const costState = getWorkflowFieldState('trip', tripRecordId, 'cost');
+      if (costState) {
+        nextRow.cost_display = costState.value_text || '-';
+        nextRow.cost_value = parseNumericText(costState.value_text);
+        nextRow.field_states.cost = costState;
+      }
+
+      const tripVehicleState = getWorkflowFieldState('trip', tripRecordId, 'trip_vehicle');
+      if (tripVehicleState) {
+        nextRow.vehicle_display = tripVehicleState.value_text || '-';
+        nextRow.field_states.trip_vehicle = tripVehicleState;
+      }
+
+      const profitState = getWorkflowFieldState('trip', tripRecordId, 'profit');
+      if (profitState) {
+        nextRow.profit_display = profitState.value_text || '-';
+        nextRow.profit_value = parseNumericText(profitState.value_text);
+        nextRow.field_states.profit = profitState;
+      }
+
+      return nextRow;
+    };
+
     const linksByOrderId = new Map<string, any[]>();
     const linksByTripId = new Map<string, any[]>();
 
@@ -688,42 +940,59 @@ export async function GET(req: NextRequest) {
       }
 
       const rows = childOrders.map((order: any) =>
-        buildOrderRow({
-          order,
-          effectiveOrganizationId,
-          sourceOrganizationMap,
-          linkedTrip: trip,
-          kind: 'Groupage cargo',
-        })
+        applyTripWorkflowStatesToRow(
+          applyOrderWorkflowStatesToRow(
+            buildOrderRow({
+              order,
+              effectiveOrganizationId,
+              sourceOrganizationMap,
+              linkedTrip: trip,
+              kind: 'Groupage cargo',
+            })
+          )
+        )
       );
 
-      const allRevenueVisible = childOrders.every(
-        (order: any) => order.organization_id === effectiveOrganizationId
-      );
-      const totalRevenueValue = allRevenueVisible
-        ? childOrders.reduce(
-            (sum: number, order: any) => sum + (Number(order.price) || 0),
-            0
-          )
-        : null;
-      const totalKgValue = childOrders.reduce(
-        (sum: number, order: any) => sum + (Number(order.cargo_kg) || 0),
-        0
-      );
-      const totalLdmValue = childOrders.reduce(
-        (sum: number, order: any) => sum + (Number(order.cargo_ldm) || 0),
-        0
-      );
       const tripCostValue =
         trip.organization_id === effectiveOrganizationId ? trip.price ?? null : null;
-      const profitValue =
-        totalRevenueValue !== null && tripCostValue !== null
-          ? totalRevenueValue - tripCostValue
-          : null;
       const createdByUser = Array.isArray(trip.created_by_user)
         ? trip.created_by_user[0] ?? null
         : trip.created_by_user;
       const carrier = Array.isArray(trip.carrier) ? trip.carrier[0] ?? null : trip.carrier;
+      const groupContactState = getWorkflowFieldState('trip', trip.id, 'contact');
+      const groupCostState = getWorkflowFieldState('trip', trip.id, 'cost');
+      const groupTripVehicleState = getWorkflowFieldState('trip', trip.id, 'trip_vehicle');
+      const groupProfitState = getWorkflowFieldState('trip', trip.id, 'profit');
+
+      const effectiveGroupCostDisplay = groupCostState?.value_text || formatMoney(tripCostValue, 'EUR');
+      const effectiveGroupCostValue =
+        groupCostState?.value_text !== null && groupCostState?.value_text !== undefined
+          ? parseNumericText(groupCostState.value_text)
+          : tripCostValue;
+      const effectiveRevenueValue = rows.reduce((sum: number | null, row: any) => {
+        const value = parseNumericText(row.revenue_display);
+        if (value === null) {
+          return null;
+        }
+
+        return (sum ?? 0) + value;
+      }, 0);
+      const effectiveKgValue = rows.reduce(
+        (sum: number, row: any) => sum + (parseNumericText(row.kg_display) ?? 0),
+        0
+      );
+      const effectiveLdmValue = rows.reduce(
+        (sum: number, row: any) => sum + (parseNumericText(row.ldm_display) ?? 0),
+        0
+      );
+      const effectiveProfitDisplay =
+        groupProfitState?.value_text ||
+        formatMoney(
+          effectiveRevenueValue !== null && effectiveGroupCostValue !== null
+            ? effectiveRevenueValue - effectiveGroupCostValue
+            : null,
+          'EUR'
+        );
 
       return {
         id: `groupage-${trip.id}`,
@@ -731,21 +1000,37 @@ export async function GET(req: NextRequest) {
         trip_number: trip.trip_number ?? '-',
         trip_status: trip.status ?? null,
         carrier_display: formatCompanyDisplayName(carrier),
-        responsible_display: formatPerson(createdByUser),
-        vehicle_display: buildVehicleSummary(trip),
-        cost_value: tripCostValue,
-        cost_display: formatMoney(tripCostValue, 'EUR'),
+        responsible_display: groupContactState?.value_text || formatPerson(createdByUser),
+        vehicle_display: groupTripVehicleState?.value_text || buildVehicleSummary(trip),
+        cost_value: effectiveGroupCostValue,
+        cost_display: effectiveGroupCostDisplay,
+        field_states: {
+          ...(groupContactState ? { contact: groupContactState } : {}),
+          ...(groupCostState ? { cost: groupCostState } : {}),
+          ...(groupTripVehicleState ? { trip_vehicle: groupTripVehicleState } : {}),
+        },
         rows,
         footer: {
           id: `groupage-footer-${trip.id}`,
-          kg_value: totalKgValue || 0,
-          ldm_value: totalLdmValue || 0,
-          revenue_value: totalRevenueValue,
-          revenue_display: formatMoney(totalRevenueValue, 'EUR'),
-          cost_value: tripCostValue,
-          cost_display: formatMoney(tripCostValue, 'EUR'),
-          profit_value: profitValue,
-          profit_display: formatMoney(profitValue, 'EUR'),
+          kg_value: effectiveKgValue,
+          kg_display: formatNumericValue(effectiveKgValue),
+          ldm_value: effectiveLdmValue,
+          ldm_display: formatNumericValue(effectiveLdmValue),
+          revenue_value: effectiveRevenueValue,
+          revenue_display: formatMoney(effectiveRevenueValue, 'EUR'),
+          cost_value: effectiveGroupCostValue,
+          cost_display: effectiveGroupCostDisplay,
+          profit_value:
+            groupProfitState?.value_text !== null && groupProfitState?.value_text !== undefined
+              ? parseNumericText(groupProfitState.value_text)
+              : effectiveRevenueValue !== null && effectiveGroupCostValue !== null
+                ? effectiveRevenueValue - effectiveGroupCostValue
+                : null,
+          profit_display: effectiveProfitDisplay,
+          field_states: {
+            ...(groupCostState ? { cost: groupCostState } : {}),
+            ...(groupProfitState ? { profit: groupProfitState } : {}),
+          },
         },
       };
     });
@@ -774,12 +1059,16 @@ export async function GET(req: NextRequest) {
       }
 
       standaloneRows.push(
-        buildOrderRow({
-          order,
-          effectiveOrganizationId,
-          sourceOrganizationMap,
-          linkedTrip,
-        })
+        applyTripWorkflowStatesToRow(
+          applyOrderWorkflowStatesToRow(
+            buildOrderRow({
+              order,
+              effectiveOrganizationId,
+              sourceOrganizationMap,
+              linkedTrip,
+            })
+          )
+        )
       );
     }
 
@@ -798,12 +1087,16 @@ export async function GET(req: NextRequest) {
         .find(Boolean) || null;
 
       standaloneRows.push(
-        buildTripRow({
-          trip,
-          effectiveOrganizationId,
-          relatedOrder: firstLinkedOrder,
-          sourceOrganizationMap,
-        })
+        applyTripWorkflowStatesToRow(
+          applyOrderWorkflowStatesToRow(
+            buildTripRow({
+              trip,
+              effectiveOrganizationId,
+              relatedOrder: firstLinkedOrder,
+              sourceOrganizationMap,
+            })
+          )
+        )
       );
     }
 

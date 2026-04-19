@@ -2,8 +2,26 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Loader2 } from 'lucide-react';
+import { Check, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import type { WorkflowEditableFieldKey } from '@/lib/constants/workflow-fields';
+
+type WorkflowFieldState = {
+  update_id: string;
+  record_type: 'order' | 'trip';
+  record_id: string;
+  field_key: WorkflowEditableFieldKey;
+  value_text: string | null;
+  revision: number;
+  pending_ack: boolean;
+  acknowledged: boolean;
+  updated_by_current_user: boolean;
+  has_override: boolean;
+};
+
+type WorkflowFieldStateMap = Partial<
+  Record<WorkflowEditableFieldKey, WorkflowFieldState>
+>;
 
 type WorkflowStandaloneRow = {
   row_type: 'order_row' | 'trip_row';
@@ -27,7 +45,9 @@ type WorkflowStandaloneRow = {
   unloading_customs_display: string;
   cargo_display: string;
   cargo_kg: number | null;
+  kg_display: string | null;
   cargo_ldm: number | null;
+  ldm_display: string | null;
   revenue_value: number | null;
   revenue_display: string | null;
   cost_value: number | null;
@@ -39,18 +59,22 @@ type WorkflowStandaloneRow = {
   vehicle_display: string;
   open_order_id: string | null;
   open_trip_id: string | null;
+  field_states: WorkflowFieldStateMap;
 };
 
 type WorkflowGroupFooter = {
   id: string;
   kg_value: number | null;
+  kg_display: string | null;
   ldm_value: number | null;
+  ldm_display: string | null;
   revenue_value: number | null;
   revenue_display: string | null;
   cost_value: number | null;
   cost_display: string | null;
   profit_value: number | null;
   profit_display: string | null;
+  field_states: WorkflowFieldStateMap;
 };
 
 type WorkflowGroup = {
@@ -63,6 +87,7 @@ type WorkflowGroup = {
   vehicle_display: string;
   cost_value: number | null;
   cost_display: string | null;
+  field_states: WorkflowFieldStateMap;
   rows: WorkflowStandaloneRow[];
   footer: WorkflowGroupFooter;
 };
@@ -128,26 +153,64 @@ function buildLocationCell(display: string, extra: string) {
 function CompactCell({
   value,
   scrollable = false,
+  pendingAck = false,
+  canAcknowledge = false,
+  onAcknowledge,
 }: {
   value: string | null | undefined;
   scrollable?: boolean;
+  pendingAck?: boolean;
+  canAcknowledge?: boolean;
+  onAcknowledge?: (() => void) | null;
 }) {
   const content = value && value.trim() !== '' ? value : '-';
+  const cellClasses = pendingAck
+    ? 'border-slate-900 bg-slate-800 text-white'
+    : 'border bg-slate-50 text-slate-900';
 
   if (scrollable) {
     return (
-      <div
-        className="workflow-scrollbar flex h-6 items-center overflow-x-auto overflow-y-hidden whitespace-nowrap rounded-md border bg-slate-50 px-2 leading-none"
-        title={content}
-      >
-        {content}
+      <div className="relative">
+        <div
+          className={`workflow-scrollbar flex h-6 items-center overflow-x-auto overflow-y-hidden whitespace-nowrap rounded-md px-2 leading-none ${cellClasses} ${canAcknowledge ? 'pr-6' : ''}`}
+          title={content}
+        >
+          {content}
+        </div>
+        {canAcknowledge && onAcknowledge ? (
+          <button
+            type="button"
+            onClick={onAcknowledge}
+            className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full bg-emerald-500 p-0.5 text-white shadow-sm hover:bg-emerald-600"
+            aria-label="Acknowledge field update"
+            title="Acknowledge field update"
+          >
+            <Check className="h-2.5 w-2.5" />
+          </button>
+        ) : null}
       </div>
     );
   }
 
   return (
-    <div className="flex h-6 items-center truncate leading-none" title={content}>
-      {content}
+    <div className="relative">
+      <div
+        className={`flex h-6 items-center truncate rounded-md px-2 leading-none ${pendingAck ? 'bg-slate-800 text-white' : 'text-slate-900'} ${canAcknowledge ? 'pr-6' : ''}`}
+        title={content}
+      >
+        {content}
+      </div>
+      {canAcknowledge && onAcknowledge ? (
+        <button
+          type="button"
+          onClick={onAcknowledge}
+          className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full bg-emerald-500 p-0.5 text-white shadow-sm hover:bg-emerald-600"
+          aria-label="Acknowledge field update"
+          title="Acknowledge field update"
+        >
+          <Check className="h-2.5 w-2.5" />
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -260,15 +323,52 @@ function WorkflowRowActions({
   );
 }
 
+function WorkflowDisplayCell({
+  value,
+  scrollable = false,
+  state,
+  onAcknowledge,
+}: {
+  value: string | null | undefined;
+  scrollable?: boolean;
+  state?: WorkflowFieldState | null;
+  onAcknowledge?: (() => void) | null;
+}) {
+  return (
+    <CompactCell
+      value={value}
+      scrollable={scrollable}
+      pendingAck={!!state?.pending_ack}
+      canAcknowledge={!!state?.pending_ack && !!onAcknowledge}
+      onAcknowledge={onAcknowledge || null}
+    />
+  );
+}
+
 function WorkflowStandaloneRowView({
   row,
   onOpenOrder,
   onOpenTrip,
+  onAcknowledgeField,
+  allowAcknowledge,
 }: {
   row: WorkflowStandaloneRow;
   onOpenOrder: (orderId: string) => void;
   onOpenTrip: (tripId: string) => void;
+  onAcknowledgeField: (
+    recordType: 'order' | 'trip',
+    recordId: string,
+    fieldKey: WorkflowEditableFieldKey
+  ) => void;
+  allowAcknowledge: boolean;
 }) {
+  const acknowledge = (
+    state: WorkflowFieldState | null | undefined
+  ) =>
+    state && allowAcknowledge
+      ? () => onAcknowledgeField(state.record_type, state.record_id, state.field_key)
+      : null;
+
   return (
     <tr className="border-b hover:bg-slate-50">
       <td className="px-2 py-1.5 whitespace-nowrap">
@@ -287,64 +387,120 @@ function WorkflowStandaloneRowView({
         <CompactCell value={row.kind} />
       </td>
       <td className="px-2 py-1.5">
-        <CompactCell value={removeCompanyCode(row.company_display)} scrollable />
+        <WorkflowDisplayCell
+          value={removeCompanyCode(row.company_display)}
+          scrollable
+        />
       </td>
       <td className="px-2 py-1.5">
-        <CompactCell value={row.contact_display} scrollable />
+        <WorkflowDisplayCell
+          value={row.contact_display}
+          scrollable
+          state={row.field_states.contact}
+          onAcknowledge={acknowledge(row.field_states.contact)}
+        />
       </td>
       <td className="px-2 py-1.5">
-        <CompactCell value={row.shipper_name} scrollable />
+        <WorkflowDisplayCell
+          value={row.shipper_name}
+          scrollable
+          state={row.field_states.sender}
+          onAcknowledge={acknowledge(row.field_states.sender)}
+        />
       </td>
       <td className="px-2 py-1.5">
-        <CompactCell
+        <WorkflowDisplayCell
           value={buildLocationCell(row.loading_display, row.loading_extra)}
           scrollable
+          state={row.field_states.loading}
+          onAcknowledge={acknowledge(row.field_states.loading)}
         />
       </td>
       <td className="px-2 py-1.5">
-        <CompactCell value={row.loading_customs_display} scrollable />
+        <WorkflowDisplayCell
+          value={row.loading_customs_display}
+          scrollable
+          state={row.field_states.loading_customs}
+          onAcknowledge={acknowledge(row.field_states.loading_customs)}
+        />
       </td>
       <td className="px-2 py-1.5">
-        <CompactCell value={row.consignee_name} scrollable />
+        <WorkflowDisplayCell
+          value={row.consignee_name}
+          scrollable
+          state={row.field_states.receiver}
+          onAcknowledge={acknowledge(row.field_states.receiver)}
+        />
       </td>
       <td className="px-2 py-1.5">
-        <CompactCell
+        <WorkflowDisplayCell
           value={buildLocationCell(row.unloading_display, row.unloading_extra)}
           scrollable
+          state={row.field_states.unloading}
+          onAcknowledge={acknowledge(row.field_states.unloading)}
         />
       </td>
       <td className="px-2 py-1.5">
-        <CompactCell value={row.unloading_customs_display} scrollable />
+        <WorkflowDisplayCell
+          value={row.unloading_customs_display}
+          scrollable
+          state={row.field_states.unloading_customs}
+          onAcknowledge={acknowledge(row.field_states.unloading_customs)}
+        />
       </td>
       <td className="px-2 py-1.5">
-        <CompactCell
+        <WorkflowDisplayCell
           value={row.cargo_display}
           scrollable
+          state={row.field_states.cargo}
+          onAcknowledge={acknowledge(row.field_states.cargo)}
         />
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap">
-        <CompactCell value={formatNumberCell(row.cargo_kg)} />
+        <WorkflowDisplayCell
+          value={row.kg_display || formatNumberCell(row.cargo_kg)}
+          state={row.field_states.kg}
+          onAcknowledge={acknowledge(row.field_states.kg)}
+        />
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap">
-        <CompactCell value={formatNumberCell(row.cargo_ldm)} />
+        <WorkflowDisplayCell
+          value={row.ldm_display || formatNumberCell(row.cargo_ldm)}
+          state={row.field_states.ldm}
+          onAcknowledge={acknowledge(row.field_states.ldm)}
+        />
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap">
-        <CompactCell value={formatMoneyCell(row.revenue_display)} />
+        <WorkflowDisplayCell
+          value={formatMoneyCell(row.revenue_display)}
+          state={row.field_states.revenue}
+          onAcknowledge={acknowledge(row.field_states.revenue)}
+        />
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap">
-        <CompactCell value={formatMoneyCell(row.cost_display)} />
+        <WorkflowDisplayCell
+          value={formatMoneyCell(row.cost_display)}
+          state={row.field_states.cost}
+          onAcknowledge={acknowledge(row.field_states.cost)}
+        />
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap">
-        <CompactCell value={formatMoneyCell(row.profit_display)} />
+        <WorkflowDisplayCell
+          value={formatMoneyCell(row.profit_display)}
+          state={row.field_states.profit}
+          onAcknowledge={acknowledge(row.field_states.profit)}
+        />
       </td>
       <td className="px-2 py-1.5">
-        <CompactCell
+        <WorkflowDisplayCell
           value={
             [row.trip_display, row.trip_status ? formatStatusLabel(row.trip_status) : '', row.vehicle_display]
               .filter((value) => value && value !== '-')
               .join(' / ') || '-'
           }
           scrollable
+          state={row.field_states.trip_vehicle}
+          onAcknowledge={acknowledge(row.field_states.trip_vehicle)}
         />
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap">
@@ -363,11 +519,26 @@ function GroupageBlock({
   group,
   onOpenOrder,
   onOpenTrip,
+  onAcknowledgeField,
+  allowAcknowledge,
 }: {
   group: WorkflowGroup;
   onOpenOrder: (orderId: string) => void;
   onOpenTrip: (tripId: string) => void;
+  onAcknowledgeField: (
+    recordType: 'order' | 'trip',
+    recordId: string,
+    fieldKey: WorkflowEditableFieldKey
+  ) => void;
+  allowAcknowledge: boolean;
 }) {
+  const acknowledge = (
+    state: WorkflowFieldState | null | undefined
+  ) =>
+    state && allowAcknowledge
+      ? () => onAcknowledgeField(state.record_type, state.record_id, state.field_key)
+      : null;
+
   return (
     <div className="overflow-x-auto rounded-xl border">
       <table className="min-w-[2200px] w-full table-fixed text-[11px] leading-tight">
@@ -389,7 +560,12 @@ function GroupageBlock({
               <CompactCell value={removeCompanyCode(group.carrier_display)} scrollable />
             </td>
             <td className="px-2 py-1">
-              <CompactCell value={group.responsible_display} scrollable />
+              <WorkflowDisplayCell
+                value={group.responsible_display}
+                scrollable
+                state={group.field_states.contact}
+                onAcknowledge={acknowledge(group.field_states.contact)}
+              />
             </td>
               <td className="px-2 py-1"><CompactCell value="-" /></td>
               <td className="px-2 py-1"><CompactCell value="-" /></td>
@@ -404,11 +580,20 @@ function GroupageBlock({
             <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
             <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
             <td className="px-2 py-1 whitespace-nowrap">
-              <CompactCell value={formatMoneyCell(group.cost_display)} />
+              <WorkflowDisplayCell
+                value={formatMoneyCell(group.cost_display)}
+                state={group.field_states.cost}
+                onAcknowledge={acknowledge(group.field_states.cost)}
+              />
             </td>
             <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
             <td className="px-2 py-1">
-              <CompactCell value={group.vehicle_display} scrollable />
+              <WorkflowDisplayCell
+                value={group.vehicle_display}
+                scrollable
+                state={group.field_states.trip_vehicle}
+                onAcknowledge={acknowledge(group.field_states.trip_vehicle)}
+              />
             </td>
             <td className="px-2 py-1 whitespace-nowrap">
               <WorkflowRowActions
@@ -426,6 +611,8 @@ function GroupageBlock({
               row={row}
               onOpenOrder={onOpenOrder}
               onOpenTrip={onOpenTrip}
+              onAcknowledgeField={onAcknowledgeField}
+              allowAcknowledge={allowAcknowledge}
             />
           ))}
 
@@ -454,10 +641,18 @@ function GroupageBlock({
               <CompactCell value={formatMoneyCell(group.footer.revenue_display)} />
             </td>
             <td className="px-2 py-1 whitespace-nowrap">
-              <CompactCell value={formatMoneyCell(group.footer.cost_display)} />
+              <WorkflowDisplayCell
+                value={formatMoneyCell(group.footer.cost_display)}
+                state={group.footer.field_states.cost}
+                onAcknowledge={acknowledge(group.footer.field_states.cost)}
+              />
             </td>
             <td className="px-2 py-1 whitespace-nowrap">
-              <CompactCell value={formatMoneyCell(group.footer.profit_display)} />
+              <WorkflowDisplayCell
+                value={formatMoneyCell(group.footer.profit_display)}
+                state={group.footer.field_states.profit}
+                onAcknowledge={acknowledge(group.footer.field_states.profit)}
+              />
             </td>
             <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
             <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
@@ -472,6 +667,7 @@ export default function WorkflowPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [viewerUserId, setViewerUserId] = useState('');
+  const [effectiveManagerUserId, setEffectiveManagerUserId] = useState('');
   const [viewerIsElevated, setViewerIsElevated] = useState(false);
   const [currentOrganizationId, setCurrentOrganizationId] = useState('');
   const [groupageGroups, setGroupageGroups] = useState<WorkflowGroup[]>([]);
@@ -579,6 +775,7 @@ export default function WorkflowPage() {
       }
 
       setViewerUserId(data.viewer_user_id || '');
+      setEffectiveManagerUserId(data.effective_manager_user_id || '');
       setViewerIsElevated(!!data.viewer_is_elevated);
       setCurrentOrganizationId(data.current_organization_id || '');
       setGroupageGroups(data.groupage_groups || []);
@@ -593,6 +790,49 @@ export default function WorkflowPage() {
       setStandaloneRows([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const canAcknowledgeWorkflow =
+    !!viewerUserId &&
+    !!effectiveManagerUserId &&
+    viewerUserId === effectiveManagerUserId;
+
+  const acknowledgeWorkflowField = async (
+    recordType: 'order' | 'trip',
+    recordId: string,
+    fieldKey: WorkflowEditableFieldKey
+  ) => {
+    if (!canAcknowledgeWorkflow) {
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/workflow/field/acknowledge', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          record_type: recordType,
+          record_id: recordId,
+          field_key: fieldKey,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to acknowledge field update');
+        return;
+      }
+
+      await fetchWorkflow(
+        viewerIsElevated ? selectedOrganizationId : undefined,
+        viewerIsElevated ? selectedManagerUserId : undefined
+      );
+    } catch (error) {
+      toast.error('Failed to acknowledge field update');
     }
   };
 
@@ -828,6 +1068,8 @@ export default function WorkflowPage() {
                 group={group}
                 onOpenOrder={(orderId) => router.push(`/app/orders/${orderId}`)}
                 onOpenTrip={(tripId) => router.push(`/app/trips/${tripId}`)}
+                onAcknowledgeField={acknowledgeWorkflowField}
+                allowAcknowledge={canAcknowledgeWorkflow}
               />
             ))}
 
@@ -842,6 +1084,8 @@ export default function WorkflowPage() {
                         row={row}
                         onOpenOrder={(orderId) => router.push(`/app/orders/${orderId}`)}
                         onOpenTrip={(tripId) => router.push(`/app/trips/${tripId}`)}
+                        onAcknowledgeField={acknowledgeWorkflowField}
+                        allowAcknowledge={canAcknowledgeWorkflow}
                       />
                     ))}
                   </tbody>
