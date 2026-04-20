@@ -8,6 +8,23 @@ import {
   loadOrderLinkContext,
 } from '@/lib/server/order-trip-linking';
 import { canAccessOrderViaCargoRoute } from '@/lib/server/cargo-legs';
+import { loadWorkflowFieldUpdates } from '@/lib/server/workflow-field-updates';
+
+function parseWorkflowNumericValue(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.replace(',', '.');
+  const match = normalized.match(/-?\d+(?:\.\d+)?/);
+
+  if (!match) {
+    return null;
+  }
+
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
 export async function GET(req: NextRequest) {
   const cookieStore = cookies();
@@ -177,50 +194,122 @@ export async function GET(req: NextRequest) {
       .map((value) => value!.trim())
       .filter(Boolean)
       .join(' / ');
+    const workflowFieldUpdates = await loadWorkflowFieldUpdates(serviceSupabase, {
+      recordType: 'order',
+      recordIds: [orderId],
+    });
+    const getWorkflowValue = (fieldKey: string) =>
+      workflowFieldUpdates.get(`order:${orderId}:${fieldKey}`)?.value_text ?? null;
+
+    const loadingOverride = getWorkflowValue('loading');
+    const unloadingOverride = getWorkflowValue('unloading');
+    const kgOverride = getWorkflowValue('kg');
+    const ldmOverride = getWorkflowValue('ldm');
+    const revenueOverride = getWorkflowValue('revenue');
+
+    const orderPayload: any = {
+      ...(data as any),
+      can_view_financials: isSameOrganization,
+      client_order_number:
+        !isSameOrganization
+          ? (data as any).internal_order_number ?? null
+          : (data as any).client_order_number ?? null,
+      client:
+        !isSameOrganization && sourceOrganizationData
+          ? {
+              id: null,
+              name: sourceOrganizationData.name ?? null,
+              company_code: (sourceOrganizationData as any).company_code ?? null,
+            }
+          : client
+            ? {
+                id: client.id ?? null,
+                name: client.name ?? null,
+                company_code: client.company_code ?? null,
+              }
+            : null,
+      received_from_name:
+        !isSameOrganization ? createdByName ?? (data as any).received_from_name ?? null : (data as any).received_from_name ?? null,
+      received_from_contact:
+        !isSameOrganization
+          ? createdByContact || (data as any).received_from_contact || null
+          : (data as any).received_from_contact ?? null,
+      assigned_manager: assignedManager
+        ? {
+            first_name: assignedManager.first_name ?? null,
+            last_name: assignedManager.last_name ?? null,
+          }
+        : null,
+      created_by_user: createdByUser
+        ? {
+            first_name: createdByUser.first_name ?? null,
+            last_name: createdByUser.last_name ?? null,
+            phone: createdByUser.phone ?? null,
+            email: createdByUser.email ?? null,
+          }
+        : null,
+    };
+
+    const contactOverride = getWorkflowValue('contact');
+    if (contactOverride !== null) {
+      orderPayload.received_from_contact = contactOverride;
+    }
+
+    const senderOverride = getWorkflowValue('sender');
+    if (senderOverride !== null) {
+      orderPayload.shipper_name = senderOverride;
+    }
+
+    if (loadingOverride !== null) {
+      orderPayload.loading_address = loadingOverride;
+      orderPayload.loading_city = null;
+      orderPayload.loading_postal_code = null;
+      orderPayload.loading_country = null;
+      orderPayload.loading_reference = null;
+    }
+
+    const loadingCustomsOverride = getWorkflowValue('loading_customs');
+    if (loadingCustomsOverride !== null) {
+      orderPayload.loading_customs_info = loadingCustomsOverride;
+    }
+
+    const receiverOverride = getWorkflowValue('receiver');
+    if (receiverOverride !== null) {
+      orderPayload.consignee_name = receiverOverride;
+    }
+
+    if (unloadingOverride !== null) {
+      orderPayload.unloading_address = unloadingOverride;
+      orderPayload.unloading_city = null;
+      orderPayload.unloading_postal_code = null;
+      orderPayload.unloading_country = null;
+      orderPayload.unloading_reference = null;
+    }
+
+    const unloadingCustomsOverride = getWorkflowValue('unloading_customs');
+    if (unloadingCustomsOverride !== null) {
+      orderPayload.unloading_customs_info = unloadingCustomsOverride;
+    }
+
+    const cargoOverride = getWorkflowValue('cargo');
+    if (cargoOverride !== null) {
+      orderPayload.cargo_description = cargoOverride;
+    }
+
+    if (kgOverride !== null) {
+      orderPayload.cargo_kg = parseWorkflowNumericValue(kgOverride);
+    }
+
+    if (ldmOverride !== null) {
+      orderPayload.cargo_ldm = parseWorkflowNumericValue(ldmOverride);
+    }
+
+    if (revenueOverride !== null) {
+      orderPayload.price = parseWorkflowNumericValue(revenueOverride);
+    }
 
     return NextResponse.json({
-      order: {
-        ...(data as any),
-        can_view_financials: isSameOrganization,
-        client_order_number:
-          !isSameOrganization
-            ? (data as any).internal_order_number ?? null
-            : (data as any).client_order_number ?? null,
-        client:
-          !isSameOrganization && sourceOrganizationData
-            ? {
-                id: null,
-                name: sourceOrganizationData.name ?? null,
-                company_code: (sourceOrganizationData as any).company_code ?? null,
-              }
-            : client
-              ? {
-                  id: client.id ?? null,
-                  name: client.name ?? null,
-                  company_code: client.company_code ?? null,
-                }
-              : null,
-        received_from_name:
-          !isSameOrganization ? createdByName ?? (data as any).received_from_name ?? null : (data as any).received_from_name ?? null,
-        received_from_contact:
-          !isSameOrganization
-            ? createdByContact || (data as any).received_from_contact || null
-            : (data as any).received_from_contact ?? null,
-        assigned_manager: assignedManager
-          ? {
-              first_name: assignedManager.first_name ?? null,
-              last_name: assignedManager.last_name ?? null,
-            }
-          : null,
-        created_by_user: createdByUser
-          ? {
-              first_name: createdByUser.first_name ?? null,
-              last_name: createdByUser.last_name ?? null,
-              phone: createdByUser.phone ?? null,
-              email: createdByUser.email ?? null,
-            }
-          : null,
-      },
+      order: orderPayload,
       shared_manager_user_id: sharedManagerUserId ?? '',
       shared_organization_id: sharedOrganizationId ?? order.organization_id ?? null,
     });

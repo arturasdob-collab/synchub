@@ -8,6 +8,23 @@ import {
   loadTripLinkContext,
 } from '@/lib/server/order-trip-linking';
 import { canAccessTripViaCargoRoute } from '@/lib/server/cargo-legs';
+import { loadWorkflowFieldUpdates } from '@/lib/server/workflow-field-updates';
+
+function parseWorkflowNumericValue(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.replace(',', '.');
+  const match = normalized.match(/-?\d+(?:\.\d+)?/);
+
+  if (!match) {
+    return null;
+  }
+
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
 export async function GET(req: NextRequest) {
   const cookieStore = cookies();
@@ -124,46 +141,61 @@ export async function GET(req: NextRequest) {
     const groupageManager = Array.isArray((data as any).groupage_manager)
       ? (data as any).groupage_manager[0] ?? null
       : (data as any).groupage_manager;
+    const workflowFieldUpdates = await loadWorkflowFieldUpdates(serviceSupabase, {
+      recordType: 'trip',
+      recordIds: [tripId],
+    });
+    const getWorkflowValue = (fieldKey: string) =>
+      workflowFieldUpdates.get(`trip:${tripId}:${fieldKey}`)?.value_text ?? null;
+
+    const tripPayload: any = {
+      id: (data as any).id,
+      trip_number: (data as any).trip_number,
+      status: (data as any).status,
+      can_view_financials: isSameOrganization,
+      carrier_company_id: (data as any).carrier_company_id ?? null,
+      groupage_responsible_manager_id:
+        (data as any).groupage_responsible_manager_id ?? null,
+      truck_plate: (data as any).truck_plate ?? null,
+      trailer_plate: (data as any).trailer_plate ?? null,
+      driver_name: (data as any).driver_name ?? null,
+      price: (data as any).price ?? null,
+      payment_term_days: (data as any).payment_term_days ?? null,
+      payment_type: (data as any).payment_type ?? null,
+      vat_rate: (data as any).vat_rate ?? null,
+      notes: (data as any).notes ?? null,
+      is_groupage: !!(data as any).is_groupage,
+      created_at: (data as any).created_at ?? null,
+      updated_at: (data as any).updated_at ?? null,
+      carrier: carrier
+        ? {
+            name: carrier.name ?? null,
+            company_code: carrier.company_code ?? null,
+          }
+        : null,
+      created_by_user: createdByUser
+        ? {
+            first_name: createdByUser.first_name ?? null,
+            last_name: createdByUser.last_name ?? null,
+          }
+        : null,
+      groupage_manager: groupageManager
+        ? {
+            first_name: groupageManager.first_name ?? null,
+            last_name: groupageManager.last_name ?? null,
+          }
+        : null,
+      workflow_contact_display: getWorkflowValue('contact'),
+      workflow_trip_vehicle_display: getWorkflowValue('trip_vehicle'),
+    };
+
+    const costOverride = getWorkflowValue('cost');
+    if (costOverride !== null) {
+      tripPayload.price = parseWorkflowNumericValue(costOverride);
+    }
 
     return NextResponse.json({
-      trip: {
-        id: (data as any).id,
-        trip_number: (data as any).trip_number,
-        status: (data as any).status,
-        can_view_financials: isSameOrganization,
-        carrier_company_id: (data as any).carrier_company_id ?? null,
-        groupage_responsible_manager_id:
-          (data as any).groupage_responsible_manager_id ?? null,
-        truck_plate: (data as any).truck_plate ?? null,
-        trailer_plate: (data as any).trailer_plate ?? null,
-        driver_name: (data as any).driver_name ?? null,
-        price: (data as any).price ?? null,
-        payment_term_days: (data as any).payment_term_days ?? null,
-        payment_type: (data as any).payment_type ?? null,
-        vat_rate: (data as any).vat_rate ?? null,
-        notes: (data as any).notes ?? null,
-        is_groupage: !!(data as any).is_groupage,
-        created_at: (data as any).created_at ?? null,
-        updated_at: (data as any).updated_at ?? null,
-        carrier: carrier
-          ? {
-              name: carrier.name ?? null,
-              company_code: carrier.company_code ?? null,
-            }
-          : null,
-        created_by_user: createdByUser
-          ? {
-              first_name: createdByUser.first_name ?? null,
-              last_name: createdByUser.last_name ?? null,
-            }
-          : null,
-        groupage_manager: groupageManager
-          ? {
-              first_name: groupageManager.first_name ?? null,
-              last_name: groupageManager.last_name ?? null,
-            }
-          : null,
-      },
+      trip: tripPayload,
       shared_manager_user_id: sharedManagerUserId ?? '',
       shared_organization_id: sharedOrganizationId ?? trip.organization_id ?? null,
     });

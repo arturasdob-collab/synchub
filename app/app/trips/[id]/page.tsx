@@ -50,6 +50,8 @@ type TripDetails = {
     first_name: string | null;
     last_name: string | null;
   } | null;
+  workflow_contact_display?: string | null;
+  workflow_trip_vehicle_display?: string | null;
 };
 
 type CarrierOption = {
@@ -1394,10 +1396,11 @@ export default function TripPage() {
     );
   }
 
-  const createdBy =
+  const createdByBase =
     trip.created_by_user?.first_name || trip.created_by_user?.last_name
       ? `${trip.created_by_user?.first_name || ''} ${trip.created_by_user?.last_name || ''}`.trim()
       : '-';
+  const createdBy = trip.workflow_contact_display || createdByBase;
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
@@ -1451,6 +1454,15 @@ export default function TripPage() {
                 {orderDraft?.exists ? 'Saved' : 'Not created'}
               </span>
             </div>
+
+            {trip.workflow_trip_vehicle_display ? (
+              <div className="text-sm text-slate-500">
+                Trip / Vehicle{' '}
+                <span className="font-medium text-slate-700 break-all">
+                  {trip.workflow_trip_vehicle_display}
+                </span>
+              </div>
+            ) : null}
 
             {orderDraft?.exists && orderDraft?.updated_at && (
               <div className="text-sm text-slate-500">
@@ -2046,6 +2058,15 @@ export default function TripPage() {
                   <div className="font-medium">{formatManagerLabel(sharedManager)}</div>
                 </div>
               )}
+
+              {trip.workflow_trip_vehicle_display ? (
+                <div>
+                  <div className="text-slate-500">Trip / Vehicle</div>
+                  <div className="font-medium break-all">
+                    {trip.workflow_trip_vehicle_display}
+                  </div>
+                </div>
+              ) : null}
 
               <div>
                 <div className="text-slate-500">Driver</div>
