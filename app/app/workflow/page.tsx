@@ -32,6 +32,7 @@ type WorkflowStandaloneRow = {
   prep_date: string | null;
   delivery_date: string | null;
   record_number: string;
+  client_order_number?: string | null;
   kind: string;
   company_display: string;
   contact_display: string;
@@ -233,6 +234,7 @@ function CompactCell({
 function buildStandaloneSearchText(row: WorkflowStandaloneRow) {
   return [
     row.record_number,
+    row.client_order_number,
     row.kind,
     row.status,
     row.company_display,
@@ -266,11 +268,23 @@ function buildGroupSearchText(group: WorkflowGroup) {
     group.responsible_display,
     group.vehicle_display,
     group.cost_display,
-    ...group.rows.map(buildStandaloneSearchText),
   ]
     .filter(Boolean)
     .join(' ')
     .toLowerCase();
+}
+
+function buildRecordNumberDisplay(row: WorkflowStandaloneRow) {
+  const values =
+    row.row_type === 'order_row'
+      ? [row.record_number, row.client_order_number]
+      : [row.record_number];
+
+  const normalized = values
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter((value, index, array) => value !== '' && array.indexOf(value) === index);
+
+  return normalized.length > 0 ? normalized.join(' / ') : '-';
 }
 
 function WorkflowTableHeader() {
@@ -280,7 +294,7 @@ function WorkflowTableHeader() {
         <th className="w-[82px] px-2 py-2 text-left font-semibold text-slate-700">Status</th>
         <th className="w-[82px] px-2 py-2 text-left font-semibold text-slate-700">Prep</th>
         <th className="w-[82px] px-2 py-2 text-left font-semibold text-slate-700">Delivery</th>
-        <th className="w-[110px] px-2 py-2 text-left font-semibold text-slate-700">No. / Trip</th>
+        <th className="w-[170px] px-2 py-2 text-left font-semibold text-slate-700">No. / Trip</th>
         <th className="w-[82px] px-2 py-2 text-left font-semibold text-slate-700">Kind</th>
         <th className="w-[180px] px-2 py-2 text-left font-semibold text-slate-700">Company</th>
         <th className="w-[180px] px-2 py-2 text-left font-semibold text-slate-700">Contact</th>
@@ -297,44 +311,8 @@ function WorkflowTableHeader() {
         <th className="w-[95px] px-2 py-2 text-left font-semibold text-slate-700">Cost</th>
         <th className="w-[95px] px-2 py-2 text-left font-semibold text-slate-700">Profit</th>
         <th className="w-[260px] px-2 py-2 text-left font-semibold text-slate-700">Trip / Vehicle</th>
-        <th className="w-[100px] px-2 py-2 text-left font-semibold text-slate-700">Open</th>
       </tr>
     </thead>
-  );
-}
-
-function WorkflowRowActions({
-  orderId,
-  tripId,
-  onOpenOrder,
-  onOpenTrip,
-}: {
-  orderId: string | null;
-  tripId: string | null;
-  onOpenOrder: (orderId: string) => void;
-  onOpenTrip: (tripId: string) => void;
-}) {
-  return (
-    <div className="flex items-center gap-1">
-      {orderId ? (
-        <button
-          type="button"
-          onClick={() => onOpenOrder(orderId)}
-          className="rounded-md border px-1.5 py-0.5 text-[10px] hover:bg-white"
-        >
-          Order
-        </button>
-      ) : null}
-      {tripId ? (
-        <button
-          type="button"
-          onClick={() => onOpenTrip(tripId)}
-          className="rounded-md border px-1.5 py-0.5 text-[10px] hover:bg-white"
-        >
-          Trip
-        </button>
-      ) : null}
-    </div>
   );
 }
 
@@ -487,7 +465,28 @@ function WorkflowStandaloneRowView({
         <CompactCell value={row.delivery_date || '-'} />
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap font-medium text-slate-900">
-        <CompactCell value={row.record_number} />
+        <button
+          type="button"
+          onClick={() => {
+            if (row.row_type === 'trip_row' && row.open_trip_id) {
+              onOpenTrip(row.open_trip_id);
+              return;
+            }
+
+            if (row.open_order_id) {
+              onOpenOrder(row.open_order_id);
+              return;
+            }
+
+            if (row.open_trip_id) {
+              onOpenTrip(row.open_trip_id);
+            }
+          }}
+          className="block w-full text-left"
+          title={buildRecordNumberDisplay(row)}
+        >
+          <CompactCell value={buildRecordNumberDisplay(row)} scrollable />
+        </button>
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap">
         <CompactCell value={row.kind} />
@@ -815,14 +814,6 @@ function WorkflowStandaloneRowView({
           onCancelEdit={onCancelEdit}
         />
       </td>
-      <td className="px-2 py-1.5 whitespace-nowrap">
-        <WorkflowRowActions
-          orderId={row.open_order_id}
-          tripId={row.open_trip_id}
-          onOpenOrder={onOpenOrder}
-          onOpenTrip={onOpenTrip}
-        />
-      </td>
     </tr>
   );
 }
@@ -903,7 +894,14 @@ function GroupageBlock({
             <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
             <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
             <td className="px-2 py-1 whitespace-nowrap font-semibold text-slate-900">
-              <CompactCell value={group.trip_number} />
+              <button
+                type="button"
+                onClick={() => onOpenTrip(group.trip_id)}
+                className="block w-full text-left"
+                title={group.trip_number}
+              >
+                <CompactCell value={group.trip_number} scrollable />
+              </button>
             </td>
             <td className="px-2 py-1 whitespace-nowrap font-medium text-amber-900">
               <CompactCell value="Groupage start" />
@@ -978,14 +976,6 @@ function GroupageBlock({
                 onChangeEditingValue={onChangeEditingValue}
                 onSubmitEdit={onSubmitEdit}
                 onCancelEdit={onCancelEdit}
-              />
-            </td>
-            <td className="px-2 py-1 whitespace-nowrap">
-              <WorkflowRowActions
-                orderId={null}
-                tripId={group.trip_id}
-                onOpenOrder={onOpenOrder}
-                onOpenTrip={onOpenTrip}
               />
             </td>
           </tr>
@@ -1075,7 +1065,6 @@ function GroupageBlock({
                 onCancelEdit={onCancelEdit}
               />
             </td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
             <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
           </tr>
         </tbody>
