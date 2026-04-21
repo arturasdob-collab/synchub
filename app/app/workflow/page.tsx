@@ -124,6 +124,80 @@ type WorkflowEditingCell = {
   field_key: WorkflowEditableFieldKey;
 };
 
+type WorkflowFilters = {
+  search: string;
+  status: string;
+  prepFrom: string;
+  prepTo: string;
+  deliveryFrom: string;
+  deliveryTo: string;
+  recordNumber: string;
+  kind: string;
+  company: string;
+  contact: string;
+  sender: string;
+  loading: string;
+  loadingCustoms: string;
+  receiver: string;
+  unloading: string;
+  unloadingCustoms: string;
+  cargo: string;
+  kg: string;
+  ldm: string;
+  revenue: string;
+  cost: string;
+  profit: string;
+  tripVehicle: string;
+};
+
+type WorkflowHeaderFilterId =
+  | 'status'
+  | 'prep'
+  | 'delivery'
+  | 'record_number'
+  | 'kind'
+  | 'company'
+  | 'contact'
+  | 'sender'
+  | 'loading'
+  | 'loading_customs'
+  | 'receiver'
+  | 'unloading'
+  | 'unloading_customs'
+  | 'cargo'
+  | 'kg'
+  | 'ldm'
+  | 'revenue'
+  | 'cost'
+  | 'profit'
+  | 'trip_vehicle';
+
+const DEFAULT_FILTERS: WorkflowFilters = {
+  search: '',
+  status: 'all',
+  prepFrom: '',
+  prepTo: '',
+  deliveryFrom: '',
+  deliveryTo: '',
+  recordNumber: '',
+  kind: '',
+  company: '',
+  contact: '',
+  sender: '',
+  loading: '',
+  loadingCustoms: '',
+  receiver: '',
+  unloading: '',
+  unloadingCustoms: '',
+  cargo: '',
+  kg: '',
+  ldm: '',
+  revenue: '',
+  cost: '',
+  profit: '',
+  tripVehicle: '',
+};
+
 function formatStatusLabel(value: string | null | undefined) {
   if (!value) return '-';
   return value.charAt(0).toUpperCase() + value.slice(1);
@@ -287,30 +361,203 @@ function buildRecordNumberDisplay(row: WorkflowStandaloneRow) {
   return normalized.length > 0 ? normalized.join(' / ') : '-';
 }
 
-function WorkflowTableHeader() {
+function matchesText(value: string | null | undefined, query: string) {
+  if (!query.trim()) {
+    return true;
+  }
+
+  return (value || '').toLowerCase().includes(query.trim().toLowerCase());
+}
+
+function matchesDateRange(
+  value: string | null | undefined,
+  from: string,
+  to: string
+) {
+  if (!from && !to) {
+    return true;
+  }
+
+  if (!value) {
+    return false;
+  }
+
+  const date = new Date(`${value}T00:00:00`);
+
+  if (from && date < new Date(`${from}T00:00:00`)) {
+    return false;
+  }
+
+  if (to && date > new Date(`${to}T23:59:59`)) {
+    return false;
+  }
+
+  return true;
+}
+
+function HeaderFilterButton({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-left text-xs font-semibold ${
+        active ? 'bg-slate-200 text-slate-900' : 'text-slate-700 hover:bg-slate-100'
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+function WorkflowTableHeader({
+  filters,
+  activeHeaderFilter,
+  setActiveHeaderFilter,
+  updateFilter,
+}: {
+  filters: WorkflowFilters;
+  activeHeaderFilter: WorkflowHeaderFilterId | null;
+  setActiveHeaderFilter: (value: WorkflowHeaderFilterId | null) => void;
+  updateFilter: <K extends keyof WorkflowFilters>(key: K, value: WorkflowFilters[K]) => void;
+}) {
+  const toggleFilter = (filterId: WorkflowHeaderFilterId) => {
+    setActiveHeaderFilter(activeHeaderFilter === filterId ? null : filterId);
+  };
+
+  const renderTextFilter = (
+    filterId: WorkflowHeaderFilterId,
+    label: string,
+    filterKey: keyof WorkflowFilters,
+    widthClass = 'w-48',
+    placeholder = 'Filter value'
+  ) => (
+    <th className="px-2 py-2 text-left align-top" data-workflow-header-filter-root="true">
+      <div className="relative">
+        <HeaderFilterButton
+          label={label}
+          active={activeHeaderFilter === filterId}
+          onClick={() => toggleFilter(filterId)}
+        />
+        {activeHeaderFilter === filterId ? (
+          <div
+            className={`absolute left-0 top-full z-20 mt-2 ${widthClass} rounded-xl border bg-white p-2 shadow-lg`}
+          >
+            <input
+              value={filters[filterKey] as string}
+              onChange={(event) =>
+                updateFilter(filterKey, event.target.value as WorkflowFilters[typeof filterKey])
+              }
+              placeholder={placeholder}
+              className="w-full rounded-md border px-2 py-2 text-sm"
+            />
+          </div>
+        ) : null}
+      </div>
+    </th>
+  );
+
   return (
     <thead className="border-b bg-slate-50">
       <tr>
-        <th className="w-[82px] px-2 py-2 text-left font-semibold text-slate-700">Status</th>
-        <th className="w-[82px] px-2 py-2 text-left font-semibold text-slate-700">Prep</th>
-        <th className="w-[82px] px-2 py-2 text-left font-semibold text-slate-700">Delivery</th>
-        <th className="w-[170px] px-2 py-2 text-left font-semibold text-slate-700">No. / Trip</th>
-        <th className="w-[82px] px-2 py-2 text-left font-semibold text-slate-700">Kind</th>
-        <th className="w-[180px] px-2 py-2 text-left font-semibold text-slate-700">Company</th>
-        <th className="w-[180px] px-2 py-2 text-left font-semibold text-slate-700">Contact</th>
-        <th className="w-[150px] px-2 py-2 text-left font-semibold text-slate-700">Sender</th>
-        <th className="w-[250px] px-2 py-2 text-left font-semibold text-slate-700">Loading</th>
-        <th className="w-[190px] px-2 py-2 text-left font-semibold text-slate-700">Loading customs</th>
-        <th className="w-[150px] px-2 py-2 text-left font-semibold text-slate-700">Receiver</th>
-        <th className="w-[250px] px-2 py-2 text-left font-semibold text-slate-700">Unloading</th>
-        <th className="w-[190px] px-2 py-2 text-left font-semibold text-slate-700">Unloading customs</th>
-        <th className="w-[260px] px-2 py-2 text-left font-semibold text-slate-700">Cargo</th>
-        <th className="w-[70px] px-2 py-2 text-left font-semibold text-slate-700">KG</th>
-        <th className="w-[70px] px-2 py-2 text-left font-semibold text-slate-700">LDM</th>
-        <th className="w-[95px] px-2 py-2 text-left font-semibold text-slate-700">Revenue</th>
-        <th className="w-[95px] px-2 py-2 text-left font-semibold text-slate-700">Cost</th>
-        <th className="w-[95px] px-2 py-2 text-left font-semibold text-slate-700">Profit</th>
-        <th className="w-[260px] px-2 py-2 text-left font-semibold text-slate-700">Trip / Vehicle</th>
+        <th className="px-2 py-2 text-left align-top" data-workflow-header-filter-root="true">
+          <div className="relative">
+            <HeaderFilterButton
+              label="Status"
+              active={activeHeaderFilter === 'status'}
+              onClick={() => toggleFilter('status')}
+            />
+            {activeHeaderFilter === 'status' ? (
+              <div className="absolute left-0 top-full z-20 mt-2 w-48 rounded-xl border bg-white p-2 shadow-lg">
+                <select
+                  value={filters.status}
+                  onChange={(event) => updateFilter('status', event.target.value)}
+                  className="w-full rounded-md border px-2 py-2 text-sm"
+                >
+                  <option value="all">All statuses</option>
+                  <option value="active">Active</option>
+                  <option value="confirmed">Confirmed</option>
+                  <option value="unconfirmed">Unconfirmed</option>
+                  <option value="completed">Completed</option>
+                </select>
+              </div>
+            ) : null}
+          </div>
+        </th>
+        <th className="px-2 py-2 text-left align-top" data-workflow-header-filter-root="true">
+          <div className="relative">
+            <HeaderFilterButton
+              label="Prep"
+              active={activeHeaderFilter === 'prep'}
+              onClick={() => toggleFilter('prep')}
+            />
+            {activeHeaderFilter === 'prep' ? (
+              <div className="absolute left-0 top-full z-20 mt-2 w-48 rounded-xl border bg-white p-2 shadow-lg space-y-2">
+                <input
+                  type="date"
+                  value={filters.prepFrom}
+                  onChange={(event) => updateFilter('prepFrom', event.target.value)}
+                  className="w-full rounded-md border px-2 py-2 text-sm"
+                />
+                <input
+                  type="date"
+                  value={filters.prepTo}
+                  onChange={(event) => updateFilter('prepTo', event.target.value)}
+                  className="w-full rounded-md border px-2 py-2 text-sm"
+                />
+              </div>
+            ) : null}
+          </div>
+        </th>
+        <th className="px-2 py-2 text-left align-top" data-workflow-header-filter-root="true">
+          <div className="relative">
+            <HeaderFilterButton
+              label="Delivery"
+              active={activeHeaderFilter === 'delivery'}
+              onClick={() => toggleFilter('delivery')}
+            />
+            {activeHeaderFilter === 'delivery' ? (
+              <div className="absolute left-0 top-full z-20 mt-2 w-48 rounded-xl border bg-white p-2 shadow-lg space-y-2">
+                <input
+                  type="date"
+                  value={filters.deliveryFrom}
+                  onChange={(event) => updateFilter('deliveryFrom', event.target.value)}
+                  className="w-full rounded-md border px-2 py-2 text-sm"
+                />
+                <input
+                  type="date"
+                  value={filters.deliveryTo}
+                  onChange={(event) => updateFilter('deliveryTo', event.target.value)}
+                  className="w-full rounded-md border px-2 py-2 text-sm"
+                />
+              </div>
+            ) : null}
+          </div>
+        </th>
+        {renderTextFilter('record_number', 'No. / Trip', 'recordNumber', 'w-56', 'Order, client or trip no.')}
+        {renderTextFilter('kind', 'Kind', 'kind', 'w-40', 'Kind')}
+        {renderTextFilter('company', 'Company', 'company', 'w-52', 'Company')}
+        {renderTextFilter('contact', 'Contact', 'contact', 'w-52', 'Contact')}
+        {renderTextFilter('sender', 'Sender', 'sender', 'w-44', 'Sender')}
+        {renderTextFilter('loading', 'Loading', 'loading', 'w-60', 'Loading')}
+        {renderTextFilter('loading_customs', 'Loading customs', 'loadingCustoms', 'w-56', 'Loading customs')}
+        {renderTextFilter('receiver', 'Receiver', 'receiver', 'w-44', 'Receiver')}
+        {renderTextFilter('unloading', 'Unloading', 'unloading', 'w-60', 'Unloading')}
+        {renderTextFilter('unloading_customs', 'Unloading customs', 'unloadingCustoms', 'w-56', 'Unloading customs')}
+        {renderTextFilter('cargo', 'Cargo', 'cargo', 'w-60', 'Cargo')}
+        {renderTextFilter('kg', 'KG', 'kg', 'w-32', 'KG')}
+        {renderTextFilter('ldm', 'LDM', 'ldm', 'w-32', 'LDM')}
+        {renderTextFilter('revenue', 'Revenue', 'revenue', 'w-36', 'Revenue')}
+        {renderTextFilter('cost', 'Cost', 'cost', 'w-36', 'Cost')}
+        {renderTextFilter('profit', 'Profit', 'profit', 'w-36', 'Profit')}
+        {renderTextFilter('trip_vehicle', 'Trip / Vehicle', 'tripVehicle', 'w-60', 'Trip / Vehicle')}
       </tr>
     </thead>
   );
@@ -824,6 +1071,10 @@ function GroupageBlock({
   onOpenTrip,
   onAcknowledgeField,
   allowAcknowledge,
+  filters,
+  activeHeaderFilter,
+  setActiveHeaderFilter,
+  updateFilter,
   editingCell,
   editingValue,
   onStartEdit,
@@ -840,6 +1091,10 @@ function GroupageBlock({
     fieldKey: WorkflowEditableFieldKey
   ) => void;
   allowAcknowledge: boolean;
+  filters: WorkflowFilters;
+  activeHeaderFilter: WorkflowHeaderFilterId | null;
+  setActiveHeaderFilter: (value: WorkflowHeaderFilterId | null) => void;
+  updateFilter: <K extends keyof WorkflowFilters>(key: K, value: WorkflowFilters[K]) => void;
   editingCell: WorkflowEditingCell | null;
   editingValue: string;
   onStartEdit: (
@@ -885,7 +1140,12 @@ function GroupageBlock({
   return (
     <div className="overflow-x-auto rounded-xl border">
       <table className="min-w-[2200px] w-full table-fixed text-[11px] leading-tight">
-        <WorkflowTableHeader />
+        <WorkflowTableHeader
+          filters={filters}
+          activeHeaderFilter={activeHeaderFilter}
+          setActiveHeaderFilter={setActiveHeaderFilter}
+          updateFilter={updateFilter}
+        />
         <tbody>
           <tr className="border-b-2 border-amber-300 bg-amber-100/70">
             <td className="px-2 py-1 whitespace-nowrap">
@@ -1082,8 +1342,10 @@ export default function WorkflowPage() {
   const [currentOrganizationId, setCurrentOrganizationId] = useState('');
   const [groupageGroups, setGroupageGroups] = useState<WorkflowGroup[]>([]);
   const [standaloneRows, setStandaloneRows] = useState<WorkflowStandaloneRow[]>([]);
-  const [search, setSearch] = useState('');
-  const [hydrated, setHydrated] = useState(false);
+  const [filters, setFilters] = useState<WorkflowFilters>(DEFAULT_FILTERS);
+  const [filtersHydrated, setFiltersHydrated] = useState(false);
+  const [activeHeaderFilter, setActiveHeaderFilter] =
+    useState<WorkflowHeaderFilterId | null>(null);
   const [organizations, setOrganizations] = useState<OrganizationOption[]>([]);
   const [managers, setManagers] = useState<ManagerOption[]>([]);
   const [selectedOrganizationId, setSelectedOrganizationId] = useState('');
@@ -1105,24 +1367,53 @@ export default function WorkflowPage() {
 
     try {
       const saved = window.localStorage.getItem(
-        `synchub.workflow.search.${viewerUserId}`
+        `synchub.workflow.filters.${viewerUserId}`
       );
-      setSearch(saved || '');
+
+      if (!saved) {
+        setFiltersHydrated(true);
+        return;
+      }
+
+      const parsed = JSON.parse(saved) as Partial<WorkflowFilters>;
+      setFilters({
+        ...DEFAULT_FILTERS,
+        ...parsed,
+      });
     } catch (error) {
-      console.error('Failed to hydrate workflow search:', error);
-      setSearch('');
+      console.error('Failed to hydrate workflow filters:', error);
+      setFilters(DEFAULT_FILTERS);
     } finally {
-      setHydrated(true);
+      setFiltersHydrated(true);
     }
   }, [viewerUserId]);
 
   useEffect(() => {
-    if (!viewerUserId || !hydrated) {
+    if (!viewerUserId || !filtersHydrated) {
       return;
     }
 
-    window.localStorage.setItem(`synchub.workflow.search.${viewerUserId}`, search);
-  }, [hydrated, search, viewerUserId]);
+    window.localStorage.setItem(
+      `synchub.workflow.filters.${viewerUserId}`,
+      JSON.stringify(filters)
+    );
+  }, [filters, filtersHydrated, viewerUserId]);
+
+  useEffect(() => {
+    const handleOutsideClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+
+      if (!target?.closest('[data-workflow-header-filter-root="true"]')) {
+        setActiveHeaderFilter(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleOutsideClick);
+
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+    };
+  }, []);
 
   useEffect(() => {
     if (!viewerIsElevated) {
@@ -1388,26 +1679,98 @@ export default function WorkflowPage() {
   };
 
   const filteredData = useMemo(() => {
-    const query = search.trim().toLowerCase();
+    const rowMatchesFilters = (row: WorkflowStandaloneRow) => {
+      const globalSearch = filters.search.trim().toLowerCase();
+      const searchableText = buildStandaloneSearchText(row);
 
-    if (!query) {
-      return {
-        groups: groupageGroups,
-        rows: standaloneRows,
-      };
-    }
+      const matchesGlobalSearch =
+        !globalSearch || searchableText.includes(globalSearch);
+
+      const matchesStatus =
+        filters.status === 'all'
+          ? true
+          : formatStatusLabel(row.status).toLowerCase() === filters.status.toLowerCase() ||
+            (row.status || '').toLowerCase() === filters.status.toLowerCase();
+
+      return (
+        matchesGlobalSearch &&
+        matchesStatus &&
+        matchesDateRange(row.prep_date, filters.prepFrom, filters.prepTo) &&
+        matchesDateRange(row.delivery_date, filters.deliveryFrom, filters.deliveryTo) &&
+        matchesText(buildRecordNumberDisplay(row), filters.recordNumber) &&
+        matchesText(row.kind, filters.kind) &&
+        matchesText(removeCompanyCode(row.company_display), filters.company) &&
+        matchesText(row.contact_display, filters.contact) &&
+        matchesText(row.shipper_name, filters.sender) &&
+        matchesText(buildLocationCell(row.loading_display, row.loading_extra), filters.loading) &&
+        matchesText(row.loading_customs_display, filters.loadingCustoms) &&
+        matchesText(row.consignee_name, filters.receiver) &&
+        matchesText(buildLocationCell(row.unloading_display, row.unloading_extra), filters.unloading) &&
+        matchesText(row.unloading_customs_display, filters.unloadingCustoms) &&
+        matchesText(row.cargo_display, filters.cargo) &&
+        matchesText(row.kg_display || formatNumberCell(row.cargo_kg), filters.kg) &&
+        matchesText(row.ldm_display || formatNumberCell(row.cargo_ldm), filters.ldm) &&
+        matchesText(formatMoneyCell(row.revenue_display), filters.revenue) &&
+        matchesText(formatMoneyCell(row.cost_display), filters.cost) &&
+        matchesText(formatMoneyCell(row.profit_display), filters.profit) &&
+        matchesText(
+          [row.trip_display, row.trip_status ? formatStatusLabel(row.trip_status) : '', row.vehicle_display]
+            .filter((value) => value && value !== '-')
+            .join(' / ') || '-',
+          filters.tripVehicle
+        )
+      );
+    };
+
+    const groupMatchesFilters = (group: WorkflowGroup) => {
+      const globalSearch = filters.search.trim().toLowerCase();
+      const searchableText = buildGroupSearchText(group);
+
+      const matchesGlobalSearch =
+        !globalSearch || searchableText.includes(globalSearch);
+
+      const matchesStatus =
+        filters.status === 'all'
+          ? true
+          : formatStatusLabel(group.trip_status).toLowerCase() === filters.status.toLowerCase() ||
+            (group.trip_status || '').toLowerCase() === filters.status.toLowerCase();
+
+      return (
+        matchesGlobalSearch &&
+        matchesStatus &&
+        !filters.prepFrom &&
+        !filters.prepTo &&
+        !filters.deliveryFrom &&
+        !filters.deliveryTo &&
+        matchesText(group.trip_number, filters.recordNumber) &&
+        matchesText('Groupage', filters.kind) &&
+        matchesText(removeCompanyCode(group.carrier_display), filters.company) &&
+        matchesText(group.responsible_display, filters.contact) &&
+        !filters.sender.trim() &&
+        !filters.loading.trim() &&
+        !filters.loadingCustoms.trim() &&
+        !filters.receiver.trim() &&
+        !filters.unloading.trim() &&
+        !filters.unloadingCustoms.trim() &&
+        !filters.cargo.trim() &&
+        !filters.kg.trim() &&
+        !filters.ldm.trim() &&
+        !filters.revenue.trim() &&
+        matchesText(formatMoneyCell(group.cost_display), filters.cost) &&
+        !filters.profit.trim() &&
+        matchesText(group.vehicle_display, filters.tripVehicle)
+      );
+    };
 
     const groups = groupageGroups
       .map((group) => {
-        const groupMatches = buildGroupSearchText(group).includes(query);
+        const groupMatches = groupMatchesFilters(group);
 
         if (groupMatches) {
           return group;
         }
 
-        const matchingRows = group.rows.filter((row) =>
-          buildStandaloneSearchText(row).includes(query)
-        );
+        const matchingRows = group.rows.filter(rowMatchesFilters);
 
         return matchingRows.length > 0
           ? {
@@ -1418,15 +1781,24 @@ export default function WorkflowPage() {
       })
       .filter(Boolean) as WorkflowGroup[];
 
-    const rows = standaloneRows.filter((row) =>
-      buildStandaloneSearchText(row).includes(query)
-    );
+    const rows = standaloneRows.filter(rowMatchesFilters);
 
     return { groups, rows };
-  }, [groupageGroups, search, standaloneRows]);
+  }, [filters, groupageGroups, standaloneRows]);
+
+  const updateFilter = <K extends keyof WorkflowFilters>(
+    key: K,
+    value: WorkflowFilters[K]
+  ) => {
+    setFilters((prev) => ({
+      ...prev,
+      [key]: value,
+    }));
+  };
 
   const resetFilters = () => {
-    setSearch('');
+    setFilters(DEFAULT_FILTERS);
+    setActiveHeaderFilter(null);
 
     if (viewerIsElevated) {
       setSelectedOrganizationId(currentOrganizationId || '');
@@ -1501,8 +1873,8 @@ export default function WorkflowPage() {
 
             <input
               placeholder="Search..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              value={filters.search}
+              onChange={(e) => updateFilter('search', e.target.value)}
               className="w-full max-w-xs rounded-md border px-3 py-2"
             />
 
@@ -1518,8 +1890,8 @@ export default function WorkflowPage() {
           <div className="flex flex-col items-center justify-center gap-3 md:flex-row">
             <input
               placeholder="Search..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              value={filters.search}
+              onChange={(e) => updateFilter('search', e.target.value)}
               className="w-full max-w-xs rounded-md border px-3 py-2"
             />
 
@@ -1535,7 +1907,7 @@ export default function WorkflowPage() {
       </div>
 
       <div className="space-y-4">
-        {loading && !hydrated ? (
+        {loading && !filtersHydrated ? (
           <div className="rounded-2xl border bg-white p-10 flex justify-center">
             <Loader2 className="h-8 w-8 animate-spin" />
           </div>
@@ -1557,6 +1929,10 @@ export default function WorkflowPage() {
                 onOpenTrip={(tripId) => router.push(`/app/trips/${tripId}`)}
                 onAcknowledgeField={acknowledgeWorkflowField}
                 allowAcknowledge={canAcknowledgeWorkflow}
+                filters={filters}
+                activeHeaderFilter={activeHeaderFilter}
+                setActiveHeaderFilter={setActiveHeaderFilter}
+                updateFilter={updateFilter}
                 editingCell={editingCell}
                 editingValue={editingValue}
                 onStartEdit={startEditingCell}
@@ -1569,7 +1945,12 @@ export default function WorkflowPage() {
             {filteredData.rows.length > 0 ? (
               <div className="overflow-x-auto rounded-2xl border bg-white">
                 <table className="min-w-[2200px] w-full table-fixed text-[11px] leading-tight">
-                  <WorkflowTableHeader />
+                  <WorkflowTableHeader
+                    filters={filters}
+                    activeHeaderFilter={activeHeaderFilter}
+                    setActiveHeaderFilter={setActiveHeaderFilter}
+                    updateFilter={updateFilter}
+                  />
                   <tbody>
                     {filteredData.rows.map((row) => (
                       <WorkflowStandaloneRowView
