@@ -7,6 +7,7 @@ import {
   loadCurrentLinkingProfile,
 } from '@/lib/server/order-trip-linking';
 import { loadCargoVisibleOrderIds } from '@/lib/server/cargo-legs';
+import { loadWorkflowFieldUpdates } from '@/lib/server/workflow-field-updates';
 
 export async function GET() {
   const cookieStore = cookies();
@@ -312,6 +313,11 @@ export async function GET() {
       );
     }
 
+    const workflowStatusUpdates = await loadWorkflowFieldUpdates(serviceSupabase, {
+      recordType: 'order',
+      recordIds: orderIds,
+    });
+
     const orders = visibleRows.map((item: any) => {
       const client = Array.isArray(item.client) ? (item.client[0] ?? null) : item.client;
       const createdByUser = Array.isArray(item.created_by_user)
@@ -333,7 +339,9 @@ export async function GET() {
           item.organization_id !== organizationId
             ? item.internal_order_number
             : item.client_order_number,
-        status: item.status,
+        status:
+          workflowStatusUpdates.get(`order:${item.id}:status`)?.value_text ??
+          item.status,
         loading_date: item.loading_date ?? null,
         unloading_date: item.unloading_date ?? null,
         price: item.price ?? null,

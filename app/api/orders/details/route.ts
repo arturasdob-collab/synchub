@@ -251,6 +251,12 @@ export async function GET(req: NextRequest) {
     };
 
     const contactOverride = getWorkflowValue('contact');
+    const statusOverride = getWorkflowValue('status');
+
+    if (statusOverride !== null) {
+      orderPayload.status = statusOverride;
+    }
+
     if (contactOverride !== null) {
       orderPayload.received_from_contact = contactOverride;
     }

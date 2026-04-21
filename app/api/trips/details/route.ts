@@ -189,6 +189,11 @@ export async function GET(req: NextRequest) {
       workflow_trip_vehicle_display: getWorkflowValue('trip_vehicle'),
     };
 
+    const statusOverride = getWorkflowValue('status');
+    if (statusOverride !== null) {
+      tripPayload.status = statusOverride;
+    }
+
     const costOverride = getWorkflowValue('cost');
     if (costOverride !== null) {
       tripPayload.price = parseWorkflowNumericValue(costOverride);

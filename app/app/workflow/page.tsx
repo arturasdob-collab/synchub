@@ -4,7 +4,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import type { WorkflowEditableFieldKey } from '@/lib/constants/workflow-fields';
+import {
+  WORKFLOW_EXECUTION_STATUSES,
+  WORKFLOW_EXECUTION_STATUS_LABELS,
+  type WorkflowEditableFieldKey,
+  type WorkflowExecutionStatus,
+} from '@/lib/constants/workflow-fields';
 
 type WorkflowFieldState = {
   update_id: string;
@@ -106,6 +111,15 @@ type WorkflowResponse = {
   standalone_rows: WorkflowStandaloneRow[];
 };
 
+type WorkflowFieldUpdateResponse = {
+  id: string;
+  record_type: 'order' | 'trip';
+  record_id: string;
+  field_key: WorkflowEditableFieldKey;
+  value_text: string | null;
+  revision: number;
+};
+
 type OrganizationOption = {
   id: string;
   name: string;
@@ -198,13 +212,40 @@ const DEFAULT_FILTERS: WorkflowFilters = {
   tripVehicle: '',
 };
 
+const WORKFLOW_STATUS_OPTIONS = WORKFLOW_EXECUTION_STATUSES.map((status) => ({
+  value: status,
+  label: WORKFLOW_EXECUTION_STATUS_LABELS[status],
+}));
+
 function formatStatusLabel(value: string | null | undefined) {
   if (!value) return '-';
-  return value.charAt(0).toUpperCase() + value.slice(1);
+
+  return (
+    WORKFLOW_EXECUTION_STATUS_LABELS[
+      value as WorkflowExecutionStatus
+    ] ||
+    value.charAt(0).toUpperCase() + value.slice(1)
+  );
 }
 
 function formatMoneyCell(value: string | null | undefined) {
   return value || '-';
+}
+
+function parseWorkflowNumericValue(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.replace(',', '.');
+  const match = normalized.match(/-?\d+(?:\.\d+)?/);
+
+  if (!match) {
+    return null;
+  }
+
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function formatNumberCell(value: number | null | undefined) {
@@ -311,6 +352,7 @@ function buildStandaloneSearchText(row: WorkflowStandaloneRow) {
     row.client_order_number,
     row.kind,
     row.status,
+    formatStatusLabel(row.status),
     row.company_display,
     row.contact_display,
     row.shipper_name,
@@ -324,6 +366,7 @@ function buildStandaloneSearchText(row: WorkflowStandaloneRow) {
     row.cargo_display,
     row.trip_display,
     row.trip_status,
+    formatStatusLabel(row.trip_status),
     row.vehicle_display,
     row.revenue_display,
     row.cost_display,
@@ -338,6 +381,7 @@ function buildGroupSearchText(group: WorkflowGroup) {
   return [
     group.trip_number,
     group.trip_status,
+    formatStatusLabel(group.trip_status),
     group.carrier_display,
     group.responsible_display,
     group.vehicle_display,
@@ -359,6 +403,220 @@ function buildRecordNumberDisplay(row: WorkflowStandaloneRow) {
     .filter((value, index, array) => value !== '' && array.indexOf(value) === index);
 
   return normalized.length > 0 ? normalized.join(' / ') : '-';
+}
+
+function buildPendingFieldState(
+  fieldUpdate: WorkflowFieldUpdateResponse
+): WorkflowFieldState {
+  return {
+    update_id: fieldUpdate.id,
+    record_type: fieldUpdate.record_type,
+    record_id: fieldUpdate.record_id,
+    field_key: fieldUpdate.field_key,
+    value_text: fieldUpdate.value_text,
+    revision: fieldUpdate.revision,
+    pending_ack: false,
+    acknowledged: true,
+    updated_by_current_user: true,
+    has_override: true,
+  };
+}
+
+function applyFieldUpdateToStandaloneRow(
+  row: WorkflowStandaloneRow,
+  fieldUpdate: WorkflowFieldUpdateResponse,
+  fieldState: WorkflowFieldState
+) {
+  const matchesRecord =
+    (fieldUpdate.record_type === 'order' && row.order_id === fieldUpdate.record_id) ||
+    (fieldUpdate.record_type === 'trip' && row.trip_id === fieldUpdate.record_id);
+
+  if (!matchesRecord) {
+    return row;
+  }
+
+  const nextRow: WorkflowStandaloneRow = {
+    ...row,
+    field_states: {
+      ...row.field_states,
+      [fieldUpdate.field_key]: fieldState,
+    },
+  };
+
+  switch (fieldUpdate.field_key) {
+    case 'status': {
+      if (fieldUpdate.record_type === 'order') {
+        nextRow.status = fieldUpdate.value_text || nextRow.status || 'active';
+      } else {
+        nextRow.trip_status = fieldUpdate.value_text || nextRow.trip_status || 'active';
+        if (nextRow.row_type === 'trip_row') {
+          nextRow.status = fieldUpdate.value_text || nextRow.status || 'active';
+        }
+      }
+      break;
+    }
+    case 'contact': {
+      if (fieldUpdate.record_type === 'order') {
+        nextRow.contact_display = fieldUpdate.value_text || '-';
+      } else if (nextRow.row_type === 'trip_row') {
+        nextRow.contact_display = fieldUpdate.value_text || '-';
+      }
+      break;
+    }
+    case 'sender': {
+      nextRow.shipper_name = fieldUpdate.value_text || '-';
+      break;
+    }
+    case 'loading': {
+      nextRow.loading_display = fieldUpdate.value_text || '-';
+      nextRow.loading_extra = '';
+      break;
+    }
+    case 'loading_customs': {
+      nextRow.loading_customs_display = fieldUpdate.value_text || '-';
+      break;
+    }
+    case 'receiver': {
+      nextRow.consignee_name = fieldUpdate.value_text || '-';
+      break;
+    }
+    case 'unloading': {
+      nextRow.unloading_display = fieldUpdate.value_text || '-';
+      nextRow.unloading_extra = '';
+      break;
+    }
+    case 'unloading_customs': {
+      nextRow.unloading_customs_display = fieldUpdate.value_text || '-';
+      break;
+    }
+    case 'cargo': {
+      nextRow.cargo_display = fieldUpdate.value_text || '-';
+      break;
+    }
+    case 'kg': {
+      nextRow.kg_display = fieldUpdate.value_text || '-';
+      nextRow.cargo_kg = parseWorkflowNumericValue(fieldUpdate.value_text);
+      break;
+    }
+    case 'ldm': {
+      nextRow.ldm_display = fieldUpdate.value_text || '-';
+      nextRow.cargo_ldm = parseWorkflowNumericValue(fieldUpdate.value_text);
+      break;
+    }
+    case 'revenue': {
+      nextRow.revenue_display = fieldUpdate.value_text || '-';
+      nextRow.revenue_value = parseWorkflowNumericValue(fieldUpdate.value_text);
+      break;
+    }
+    case 'cost': {
+      nextRow.cost_display = fieldUpdate.value_text || '-';
+      nextRow.cost_value = parseWorkflowNumericValue(fieldUpdate.value_text);
+      break;
+    }
+    case 'profit': {
+      nextRow.profit_display = fieldUpdate.value_text || '-';
+      nextRow.profit_value = parseWorkflowNumericValue(fieldUpdate.value_text);
+      break;
+    }
+    case 'trip_vehicle': {
+      nextRow.vehicle_display = fieldUpdate.value_text || '-';
+      break;
+    }
+  }
+
+  return nextRow;
+}
+
+function recalculateGroupFooter(group: WorkflowGroup): WorkflowGroupFooter {
+  const kgValue = group.rows.reduce(
+    (sum, row) => sum + (parseWorkflowNumericValue(row.kg_display) ?? 0),
+    0
+  );
+  const ldmValue = group.rows.reduce(
+    (sum, row) => sum + (parseWorkflowNumericValue(row.ldm_display) ?? 0),
+    0
+  );
+  const revenueValue = group.rows.reduce(
+    (sum, row) => sum + (parseWorkflowNumericValue(row.revenue_display) ?? 0),
+    0
+  );
+  const costValue =
+    group.footer.field_states.cost?.value_text !== undefined
+      ? parseWorkflowNumericValue(group.footer.field_states.cost.value_text)
+      : group.cost_value;
+  const profitStateValue =
+    group.footer.field_states.profit?.value_text !== undefined
+      ? parseWorkflowNumericValue(group.footer.field_states.profit.value_text)
+      : null;
+  const derivedProfitValue =
+    revenueValue !== null && costValue !== null ? revenueValue - costValue : null;
+
+  return {
+    ...group.footer,
+    kg_value: kgValue,
+    kg_display: formatNumberCell(kgValue),
+    ldm_value: ldmValue,
+    ldm_display: formatNumberCell(ldmValue),
+    revenue_value: revenueValue,
+    revenue_display: formatMoneyCell(revenueValue !== null ? `${revenueValue} EUR` : null),
+    cost_value: costValue,
+    cost_display: formatMoneyCell(costValue !== null ? `${costValue} EUR` : group.footer.cost_display),
+    profit_value: profitStateValue ?? derivedProfitValue,
+    profit_display: formatMoneyCell(
+      profitStateValue !== null
+        ? `${profitStateValue} EUR`
+        : derivedProfitValue !== null
+          ? `${derivedProfitValue} EUR`
+          : group.footer.profit_display
+    ),
+  };
+}
+
+function applyFieldUpdateToGroup(
+  group: WorkflowGroup,
+  fieldUpdate: WorkflowFieldUpdateResponse,
+  fieldState: WorkflowFieldState
+) {
+  let nextGroup: WorkflowGroup = {
+    ...group,
+    rows: group.rows.map((row) => applyFieldUpdateToStandaloneRow(row, fieldUpdate, fieldState)),
+    footer: {
+      ...group.footer,
+      field_states: { ...group.footer.field_states },
+    },
+    field_states: { ...group.field_states },
+  };
+
+  if (fieldUpdate.record_type === 'trip' && group.trip_id === fieldUpdate.record_id) {
+    nextGroup.field_states[fieldUpdate.field_key] = fieldState;
+
+    switch (fieldUpdate.field_key) {
+      case 'status':
+        nextGroup.trip_status = fieldUpdate.value_text || nextGroup.trip_status || 'active';
+        break;
+      case 'contact':
+        nextGroup.responsible_display = fieldUpdate.value_text || '-';
+        break;
+      case 'cost':
+        nextGroup.cost_display = fieldUpdate.value_text || '-';
+        nextGroup.cost_value = parseWorkflowNumericValue(fieldUpdate.value_text);
+        nextGroup.footer.field_states.cost = fieldState;
+        break;
+      case 'profit':
+        nextGroup.footer.field_states.profit = fieldState;
+        break;
+      case 'trip_vehicle':
+        nextGroup.vehicle_display = fieldUpdate.value_text || '-';
+        break;
+    }
+  }
+
+  nextGroup = {
+    ...nextGroup,
+    footer: recalculateGroupFooter(nextGroup),
+  };
+
+  return nextGroup;
 }
 
 function matchesText(value: string | null | undefined, query: string) {
@@ -482,10 +740,11 @@ function WorkflowTableHeader({
                   className="w-full rounded-md border px-2 py-2 text-sm"
                 >
                   <option value="all">All statuses</option>
-                  <option value="active">Active</option>
-                  <option value="confirmed">Confirmed</option>
-                  <option value="unconfirmed">Unconfirmed</option>
-                  <option value="completed">Completed</option>
+                  {WORKFLOW_EXECUTION_STATUSES.map((status) => (
+                    <option key={status} value={status}>
+                      {WORKFLOW_EXECUTION_STATUS_LABELS[status]}
+                    </option>
+                  ))}
                 </select>
               </div>
             ) : null}
@@ -575,6 +834,7 @@ function WorkflowDisplayCell({
   onChangeEditingValue,
   onSubmitEdit,
   onCancelEdit,
+  selectOptions,
 }: {
   value: string | null | undefined;
   scrollable?: boolean;
@@ -587,8 +847,33 @@ function WorkflowDisplayCell({
   onChangeEditingValue?: ((value: string) => void) | null;
   onSubmitEdit?: (() => void) | null;
   onCancelEdit?: (() => void) | null;
+  selectOptions?: Array<{ value: string; label: string }>;
 }) {
   if (isEditing) {
+    if (selectOptions && selectOptions.length > 0) {
+      return (
+        <select
+          autoFocus
+          value={editingValue}
+          onChange={(e) => onChangeEditingValue?.(e.target.value)}
+          onBlur={() => onSubmitEdit?.()}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              onCancelEdit?.();
+            }
+          }}
+          className="h-6 w-full rounded-md border border-sky-400 bg-white px-1 text-[11px] leading-none outline-none ring-1 ring-sky-200"
+        >
+          {selectOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      );
+    }
+
     return (
       <input
         autoFocus
@@ -699,11 +984,30 @@ function WorkflowStandaloneRowView({
     allowAcknowledge && !!row.trip_editable_by_current_user && !!row.trip_id;
   const canEditOrderField = allowAcknowledge && !!row.order_id;
   const canEditTripField = allowAcknowledge && row.row_type === 'trip_row' && !!row.trip_id;
+  const statusCell =
+    row.row_type === 'trip_row' ? tripFieldCell('status') : orderFieldCell('status');
+  const canEditStatus = allowAcknowledge && !!statusCell;
 
   return (
     <tr className="border-b hover:bg-slate-50">
       <td className="px-2 py-1.5 whitespace-nowrap">
-        <CompactCell value={formatStatusLabel(row.status)} />
+        <WorkflowDisplayCell
+          value={formatStatusLabel(row.status)}
+          state={row.field_states.status}
+          onAcknowledge={acknowledge(row.field_states.status)}
+          editable={canEditStatus}
+          onStartEdit={
+            canEditStatus && statusCell
+              ? () => onStartEdit(statusCell, row.status || 'active')
+              : null
+          }
+          isEditing={matchesEditingCell(statusCell)}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
+          selectOptions={WORKFLOW_STATUS_OPTIONS}
+        />
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap">
         <CompactCell value={row.prep_date || '-'} />
@@ -1114,6 +1418,7 @@ function GroupageBlock({
 
   const canEditTripField =
     allowAcknowledge && !!group.trip_editable_by_current_user;
+  const canEditGroupStatus = allowAcknowledge;
 
   const groupHeaderCell = (fieldKey: WorkflowEditableFieldKey): WorkflowEditingCell => ({
     row_id: group.id,
@@ -1149,7 +1454,27 @@ function GroupageBlock({
         <tbody>
           <tr className="border-b-2 border-amber-300 bg-amber-100/70">
             <td className="px-2 py-1 whitespace-nowrap">
-              <CompactCell value={formatStatusLabel(group.trip_status)} />
+              <WorkflowDisplayCell
+                value={formatStatusLabel(group.trip_status)}
+                state={group.field_states.status}
+                onAcknowledge={acknowledge(group.field_states.status)}
+                editable={canEditGroupStatus}
+                onStartEdit={
+                  canEditGroupStatus
+                    ? () =>
+                        onStartEdit(
+                          groupHeaderCell('status'),
+                          group.trip_status || 'active'
+                        )
+                    : null
+                }
+                isEditing={matchesEditingCell(groupHeaderCell('status'))}
+                editingValue={editingValue}
+                onChangeEditingValue={onChangeEditingValue}
+                onSubmitEdit={onSubmitEdit}
+                onCancelEdit={onCancelEdit}
+                selectOptions={WORKFLOW_STATUS_OPTIONS}
+              />
             </td>
             <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
             <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
@@ -1600,10 +1925,25 @@ export default function WorkflowPage() {
         return;
       }
 
+      const savedFieldUpdate = data.field_update as WorkflowFieldUpdateResponse | undefined;
+
+      if (savedFieldUpdate) {
+        const localFieldState = buildPendingFieldState(savedFieldUpdate);
+
+        setGroupageGroups((prev) =>
+          prev.map((group) => applyFieldUpdateToGroup(group, savedFieldUpdate, localFieldState))
+        );
+        setStandaloneRows((prev) =>
+          prev.map((row) =>
+            applyFieldUpdateToStandaloneRow(row, savedFieldUpdate, localFieldState)
+          )
+        );
+      }
+
       setEditingCell(null);
       setEditingValue('');
 
-      await fetchWorkflow(
+      void fetchWorkflow(
         buildReloadParams().organizationId,
         buildReloadParams().managerUserId
       );

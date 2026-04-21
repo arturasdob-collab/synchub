@@ -7,6 +7,7 @@ import {
   loadCurrentLinkingProfile,
 } from '@/lib/server/order-trip-linking';
 import { loadCargoVisibleTripIds } from '@/lib/server/cargo-legs';
+import { loadWorkflowFieldUpdates } from '@/lib/server/workflow-field-updates';
 
 export async function GET() {
   const cookieStore = cookies();
@@ -244,6 +245,11 @@ export async function GET() {
       );
     }
 
+    const workflowStatusUpdates = await loadWorkflowFieldUpdates(serviceSupabase, {
+      recordType: 'trip',
+      recordIds: tripIds,
+    });
+
     const trips = visibleRows.map((item: any) => {
       const carrier = Array.isArray(item.carrier) ? item.carrier[0] ?? null : item.carrier;
       const createdByUser = Array.isArray(item.created_by_user)
@@ -254,7 +260,9 @@ export async function GET() {
       return {
         id: item.id,
         trip_number: item.trip_number,
-        status: item.status,
+        status:
+          workflowStatusUpdates.get(`trip:${item.id}:status`)?.value_text ??
+          item.status,
         truck_plate: item.truck_plate ?? null,
         trailer_plate: item.trailer_plate ?? null,
         driver_name: item.driver_name ?? null,

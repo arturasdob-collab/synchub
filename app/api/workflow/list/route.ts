@@ -816,6 +816,12 @@ export async function GET(req: NextRequest) {
       const nextRow = { ...row, field_states: { ...(row.field_states || {}) } };
       const orderRecordId = row.order_id as string | null;
 
+      const statusState = getWorkflowFieldState('order', orderRecordId, 'status');
+      if (statusState) {
+        nextRow.status = statusState.value_text || nextRow.status || 'active';
+        nextRow.field_states.status = statusState;
+      }
+
       const contactState = getWorkflowFieldState('order', orderRecordId, 'contact');
       if (contactState) {
         nextRow.contact_display = contactState.value_text || '-';
@@ -908,6 +914,7 @@ export async function GET(req: NextRequest) {
     const applyTripWorkflowStatesToRow = (
       row: any,
       options?: {
+        includeStatus?: boolean;
         includeContact?: boolean;
         includeCost?: boolean;
         includeProfit?: boolean;
@@ -916,6 +923,17 @@ export async function GET(req: NextRequest) {
     ) => {
       const nextRow = { ...row, field_states: { ...(row.field_states || {}) } };
       const tripRecordId = row.trip_id as string | null;
+
+      const statusState =
+        options?.includeStatus
+          ? getWorkflowFieldState('trip', tripRecordId, 'status')
+          : null;
+      if (statusState) {
+        nextRow.status = statusState.value_text || nextRow.status || 'active';
+        nextRow.trip_status =
+          statusState.value_text || nextRow.trip_status || nextRow.status || 'active';
+        nextRow.field_states.status = statusState;
+      }
 
       const contactState =
         options?.includeContact
@@ -1023,6 +1041,7 @@ export async function GET(req: NextRequest) {
         : trip.created_by_user;
       const carrier = Array.isArray(trip.carrier) ? trip.carrier[0] ?? null : trip.carrier;
       const groupContactState = getWorkflowFieldState('trip', trip.id, 'contact');
+      const groupStatusState = getWorkflowFieldState('trip', trip.id, 'status');
       const groupCostState = getWorkflowFieldState('trip', trip.id, 'cost');
       const groupTripVehicleState = getWorkflowFieldState('trip', trip.id, 'trip_vehicle');
       const groupProfitState = getWorkflowFieldState('trip', trip.id, 'profit');
@@ -1061,17 +1080,19 @@ export async function GET(req: NextRequest) {
         id: `groupage-${trip.id}`,
         trip_id: trip.id,
         trip_number: trip.trip_number ?? '-',
-        trip_status: trip.status ?? null,
+        trip_status: groupStatusState?.value_text || (trip.status ?? null),
         carrier_display: formatCompanyDisplayName(carrier),
         responsible_display: groupContactState?.value_text || formatPerson(createdByUser),
         vehicle_display: groupTripVehicleState?.value_text || buildVehicleSummary(trip),
         cost_value: effectiveGroupCostValue,
         cost_display: effectiveGroupCostDisplay,
         field_states: {
+          ...(groupStatusState ? { status: groupStatusState } : {}),
           ...(groupContactState ? { contact: groupContactState } : {}),
           ...(groupCostState ? { cost: groupCostState } : {}),
           ...(groupTripVehicleState ? { trip_vehicle: groupTripVehicleState } : {}),
         },
+        trip_editable_by_current_user: trip.created_by === user.id,
         rows,
         footer: {
           id: `groupage-footer-${trip.id}`,
@@ -1133,6 +1154,7 @@ export async function GET(req: NextRequest) {
             })
           ),
           {
+            includeStatus: false,
             includeCost: true,
             includeTripVehicle: true,
           }
@@ -1166,6 +1188,7 @@ export async function GET(req: NextRequest) {
             })
           ),
           {
+            includeStatus: true,
             includeContact: true,
             includeCost: true,
             includeProfit: true,

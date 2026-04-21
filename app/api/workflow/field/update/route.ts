@@ -3,6 +3,8 @@ import { createServerClient } from '@supabase/auth-helpers-nextjs';
 import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 import {
+  isWorkflowExecutionStatus,
+  WORKFLOW_EXECUTION_STATUS_LABELS,
   WORKFLOW_TRIP_CREATOR_ONLY_FIELDS,
   isWorkflowEditableFieldKey,
   isWorkflowRecordType,
@@ -69,6 +71,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Invalid field key' }, { status: 400 });
   }
 
+  const nextValue =
+    typeof body.value_text === 'string' ? body.value_text.trim() : body.value_text;
+
+  if (fieldKey === 'status') {
+    if (!isWorkflowExecutionStatus(nextValue)) {
+      return NextResponse.json({ error: 'Invalid workflow status' }, { status: 400 });
+    }
+  }
+
   const profile = await loadCurrentLinkingProfile(serviceSupabase, user.id);
   let organizationId = profile.organization_id as string;
 
@@ -94,6 +105,22 @@ export async function POST(req: Request) {
 
     if (!canEditViaShare && !canEditViaCargoRoute) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
+    if (
+      fieldKey === 'status' &&
+      nextValue === 'finished' &&
+      order.created_by !== user.id &&
+      profile.is_super_admin !== true &&
+      profile.is_creator !== true &&
+      !['OWNER', 'ADMIN'].includes(profile.role ?? '')
+    ) {
+      return NextResponse.json(
+        {
+          error: `Only order creator can set status to ${WORKFLOW_EXECUTION_STATUS_LABELS.finished.toLowerCase()}`,
+        },
+        { status: 403 }
+      );
     }
 
     organizationId = order.organization_id;
@@ -122,6 +149,22 @@ export async function POST(req: Request) {
     }
 
     if (
+      fieldKey === 'status' &&
+      nextValue === 'finished' &&
+      trip.created_by !== user.id &&
+      profile.is_super_admin !== true &&
+      profile.is_creator !== true &&
+      !['OWNER', 'ADMIN'].includes(profile.role ?? '')
+    ) {
+      return NextResponse.json(
+        {
+          error: `Only trip creator can set status to ${WORKFLOW_EXECUTION_STATUS_LABELS.finished.toLowerCase()}`,
+        },
+        { status: 403 }
+      );
+    }
+
+    if (
       WORKFLOW_TRIP_CREATOR_ONLY_FIELDS.has(fieldKey) &&
       trip.created_by !== user.id
     ) {
@@ -140,7 +183,7 @@ export async function POST(req: Request) {
       recordType,
       recordId,
       fieldKey,
-      value: body.value_text,
+      value: nextValue,
       updatedBy: user.id,
     });
 
