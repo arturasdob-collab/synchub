@@ -666,7 +666,7 @@ function HeaderFilterButton({
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-left text-xs font-semibold ${
+      className={`inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-left text-[10px] font-semibold ${
         active ? 'bg-slate-200 text-slate-900' : 'text-slate-700 hover:bg-slate-100'
       }`}
     >
@@ -677,36 +677,49 @@ function HeaderFilterButton({
 
 function WorkflowTableHeader({
   filters,
+  headerScope,
   activeHeaderFilter,
+  activeHeaderScope,
   setActiveHeaderFilter,
+  setActiveHeaderScope,
   updateFilter,
 }: {
   filters: WorkflowFilters;
+  headerScope: string;
   activeHeaderFilter: WorkflowHeaderFilterId | null;
+  activeHeaderScope: string | null;
   setActiveHeaderFilter: (value: WorkflowHeaderFilterId | null) => void;
+  setActiveHeaderScope: (value: string | null) => void;
   updateFilter: <K extends keyof WorkflowFilters>(key: K, value: WorkflowFilters[K]) => void;
 }) {
   const toggleFilter = (filterId: WorkflowHeaderFilterId) => {
-    setActiveHeaderFilter(activeHeaderFilter === filterId ? null : filterId);
+    const isSameFilter =
+      activeHeaderFilter === filterId && activeHeaderScope === headerScope;
+
+    setActiveHeaderFilter(isSameFilter ? null : filterId);
+    setActiveHeaderScope(isSameFilter ? null : headerScope);
   };
+
+  const isFilterActive = (filterId: WorkflowHeaderFilterId) =>
+    activeHeaderFilter === filterId && activeHeaderScope === headerScope;
 
   const renderTextFilter = (
     filterId: WorkflowHeaderFilterId,
     label: string,
     filterKey: keyof WorkflowFilters,
-    widthClass = 'w-48',
+    widthClass = 'w-40',
     placeholder = 'Filter value'
   ) => (
-    <th className="px-2 py-2 text-left align-top" data-workflow-header-filter-root="true">
+    <th className="px-1 py-1.5 text-left align-top" data-workflow-header-filter-root="true">
       <div className="relative">
         <HeaderFilterButton
           label={label}
-          active={activeHeaderFilter === filterId}
+          active={isFilterActive(filterId)}
           onClick={() => toggleFilter(filterId)}
         />
-        {activeHeaderFilter === filterId ? (
+        {isFilterActive(filterId) ? (
           <div
-            className={`absolute left-0 top-full z-20 mt-2 ${widthClass} rounded-xl border bg-white p-2 shadow-lg`}
+            className={`absolute left-0 top-full z-20 mt-1 ${widthClass} rounded-xl border bg-white p-2 shadow-lg`}
           >
             <input
               value={filters[filterKey] as string}
@@ -725,15 +738,15 @@ function WorkflowTableHeader({
   return (
     <thead className="border-b bg-slate-50">
       <tr>
-        <th className="px-2 py-2 text-left align-top" data-workflow-header-filter-root="true">
+        <th className="px-1 py-1.5 text-left align-top" data-workflow-header-filter-root="true">
           <div className="relative">
             <HeaderFilterButton
               label="Status"
-              active={activeHeaderFilter === 'status'}
+              active={isFilterActive('status')}
               onClick={() => toggleFilter('status')}
             />
-            {activeHeaderFilter === 'status' ? (
-              <div className="absolute left-0 top-full z-20 mt-2 w-48 rounded-xl border bg-white p-2 shadow-lg">
+            {isFilterActive('status') ? (
+              <div className="absolute left-0 top-full z-20 mt-1 w-40 rounded-xl border bg-white p-2 shadow-lg">
                 <select
                   value={filters.status}
                   onChange={(event) => updateFilter('status', event.target.value)}
@@ -750,15 +763,15 @@ function WorkflowTableHeader({
             ) : null}
           </div>
         </th>
-        <th className="px-2 py-2 text-left align-top" data-workflow-header-filter-root="true">
+        <th className="px-1 py-1.5 text-left align-top" data-workflow-header-filter-root="true">
           <div className="relative">
             <HeaderFilterButton
               label="Prep"
-              active={activeHeaderFilter === 'prep'}
+              active={isFilterActive('prep')}
               onClick={() => toggleFilter('prep')}
             />
-            {activeHeaderFilter === 'prep' ? (
-              <div className="absolute left-0 top-full z-20 mt-2 w-48 rounded-xl border bg-white p-2 shadow-lg space-y-2">
+            {isFilterActive('prep') ? (
+              <div className="absolute left-0 top-full z-20 mt-1 w-40 rounded-xl border bg-white p-2 shadow-lg space-y-2">
                 <input
                   type="date"
                   value={filters.prepFrom}
@@ -775,15 +788,15 @@ function WorkflowTableHeader({
             ) : null}
           </div>
         </th>
-        <th className="px-2 py-2 text-left align-top" data-workflow-header-filter-root="true">
+        <th className="px-1 py-1.5 text-left align-top" data-workflow-header-filter-root="true">
           <div className="relative">
             <HeaderFilterButton
               label="Delivery"
-              active={activeHeaderFilter === 'delivery'}
+              active={isFilterActive('delivery')}
               onClick={() => toggleFilter('delivery')}
             />
-            {activeHeaderFilter === 'delivery' ? (
-              <div className="absolute left-0 top-full z-20 mt-2 w-48 rounded-xl border bg-white p-2 shadow-lg space-y-2">
+            {isFilterActive('delivery') ? (
+              <div className="absolute left-0 top-full z-20 mt-1 w-40 rounded-xl border bg-white p-2 shadow-lg space-y-2">
                 <input
                   type="date"
                   value={filters.deliveryFrom}
@@ -800,23 +813,23 @@ function WorkflowTableHeader({
             ) : null}
           </div>
         </th>
-        {renderTextFilter('record_number', 'No. / Trip', 'recordNumber', 'w-56', 'Order, client or trip no.')}
-        {renderTextFilter('kind', 'Kind', 'kind', 'w-40', 'Kind')}
-        {renderTextFilter('company', 'Company', 'company', 'w-52', 'Company')}
-        {renderTextFilter('contact', 'Contact', 'contact', 'w-52', 'Contact')}
-        {renderTextFilter('sender', 'Sender', 'sender', 'w-44', 'Sender')}
-        {renderTextFilter('loading', 'Loading', 'loading', 'w-60', 'Loading')}
-        {renderTextFilter('loading_customs', 'Loading customs', 'loadingCustoms', 'w-56', 'Loading customs')}
-        {renderTextFilter('receiver', 'Receiver', 'receiver', 'w-44', 'Receiver')}
-        {renderTextFilter('unloading', 'Unloading', 'unloading', 'w-60', 'Unloading')}
-        {renderTextFilter('unloading_customs', 'Unloading customs', 'unloadingCustoms', 'w-56', 'Unloading customs')}
-        {renderTextFilter('cargo', 'Cargo', 'cargo', 'w-60', 'Cargo')}
+        {renderTextFilter('record_number', 'No. / Trip', 'recordNumber', 'w-44', 'Order, client or trip no.')}
+        {renderTextFilter('kind', 'Kind', 'kind', 'w-32', 'Kind')}
+        {renderTextFilter('company', 'Company', 'company', 'w-40', 'Company')}
+        {renderTextFilter('contact', 'Contact', 'contact', 'w-40', 'Contact')}
+        {renderTextFilter('sender', 'Sender', 'sender', 'w-36', 'Sender')}
+        {renderTextFilter('loading', 'Loading', 'loading', 'w-44', 'Loading')}
+        {renderTextFilter('loading_customs', 'Loading customs', 'loadingCustoms', 'w-44', 'Loading customs')}
+        {renderTextFilter('receiver', 'Receiver', 'receiver', 'w-36', 'Receiver')}
+        {renderTextFilter('unloading', 'Unloading', 'unloading', 'w-44', 'Unloading')}
+        {renderTextFilter('unloading_customs', 'Unloading customs', 'unloadingCustoms', 'w-44', 'Unloading customs')}
+        {renderTextFilter('cargo', 'Cargo', 'cargo', 'w-44', 'Cargo')}
         {renderTextFilter('kg', 'KG', 'kg', 'w-32', 'KG')}
         {renderTextFilter('ldm', 'LDM', 'ldm', 'w-32', 'LDM')}
         {renderTextFilter('revenue', 'Revenue', 'revenue', 'w-36', 'Revenue')}
         {renderTextFilter('cost', 'Cost', 'cost', 'w-36', 'Cost')}
         {renderTextFilter('profit', 'Profit', 'profit', 'w-36', 'Profit')}
-        {renderTextFilter('trip_vehicle', 'Trip / Vehicle', 'tripVehicle', 'w-60', 'Trip / Vehicle')}
+        {renderTextFilter('trip_vehicle', 'Trip / Vehicle', 'tripVehicle', 'w-44', 'Trip / Vehicle')}
       </tr>
     </thead>
   );
@@ -1371,13 +1384,16 @@ function WorkflowStandaloneRowView({
 
 function GroupageBlock({
   group,
+  headerScope,
   onOpenOrder,
   onOpenTrip,
   onAcknowledgeField,
   allowAcknowledge,
   filters,
   activeHeaderFilter,
+  activeHeaderScope,
   setActiveHeaderFilter,
+  setActiveHeaderScope,
   updateFilter,
   editingCell,
   editingValue,
@@ -1387,6 +1403,7 @@ function GroupageBlock({
   onCancelEdit,
 }: {
   group: WorkflowGroup;
+  headerScope: string;
   onOpenOrder: (orderId: string) => void;
   onOpenTrip: (tripId: string) => void;
   onAcknowledgeField: (
@@ -1397,7 +1414,9 @@ function GroupageBlock({
   allowAcknowledge: boolean;
   filters: WorkflowFilters;
   activeHeaderFilter: WorkflowHeaderFilterId | null;
+  activeHeaderScope: string | null;
   setActiveHeaderFilter: (value: WorkflowHeaderFilterId | null) => void;
+  setActiveHeaderScope: (value: string | null) => void;
   updateFilter: <K extends keyof WorkflowFilters>(key: K, value: WorkflowFilters[K]) => void;
   editingCell: WorkflowEditingCell | null;
   editingValue: string;
@@ -1444,11 +1463,14 @@ function GroupageBlock({
 
   return (
     <div className="overflow-x-auto rounded-xl border">
-      <table className="min-w-[2200px] w-full table-fixed text-[11px] leading-tight">
+      <table className="min-w-[2060px] w-full table-fixed text-[11px] leading-tight">
         <WorkflowTableHeader
           filters={filters}
+          headerScope={headerScope}
           activeHeaderFilter={activeHeaderFilter}
+          activeHeaderScope={activeHeaderScope}
           setActiveHeaderFilter={setActiveHeaderFilter}
+          setActiveHeaderScope={setActiveHeaderScope}
           updateFilter={updateFilter}
         />
         <tbody>
@@ -1671,6 +1693,7 @@ export default function WorkflowPage() {
   const [filtersHydrated, setFiltersHydrated] = useState(false);
   const [activeHeaderFilter, setActiveHeaderFilter] =
     useState<WorkflowHeaderFilterId | null>(null);
+  const [activeHeaderScope, setActiveHeaderScope] = useState<string | null>(null);
   const [organizations, setOrganizations] = useState<OrganizationOption[]>([]);
   const [managers, setManagers] = useState<ManagerOption[]>([]);
   const [selectedOrganizationId, setSelectedOrganizationId] = useState('');
@@ -1730,6 +1753,7 @@ export default function WorkflowPage() {
 
       if (!target?.closest('[data-workflow-header-filter-root="true"]')) {
         setActiveHeaderFilter(null);
+        setActiveHeaderScope(null);
       }
     };
 
@@ -2139,6 +2163,7 @@ export default function WorkflowPage() {
   const resetFilters = () => {
     setFilters(DEFAULT_FILTERS);
     setActiveHeaderFilter(null);
+    setActiveHeaderScope(null);
 
     if (viewerIsElevated) {
       setSelectedOrganizationId(currentOrganizationId || '');
@@ -2265,13 +2290,16 @@ export default function WorkflowPage() {
               <GroupageBlock
                 key={group.id}
                 group={group}
+                headerScope={`group-${group.id}`}
                 onOpenOrder={(orderId) => router.push(`/app/orders/${orderId}`)}
                 onOpenTrip={(tripId) => router.push(`/app/trips/${tripId}`)}
                 onAcknowledgeField={acknowledgeWorkflowField}
                 allowAcknowledge={canAcknowledgeWorkflow}
                 filters={filters}
                 activeHeaderFilter={activeHeaderFilter}
+                activeHeaderScope={activeHeaderScope}
                 setActiveHeaderFilter={setActiveHeaderFilter}
+                setActiveHeaderScope={setActiveHeaderScope}
                 updateFilter={updateFilter}
                 editingCell={editingCell}
                 editingValue={editingValue}
@@ -2284,11 +2312,14 @@ export default function WorkflowPage() {
 
             {filteredData.rows.length > 0 ? (
               <div className="overflow-x-auto rounded-2xl border bg-white">
-                <table className="min-w-[2200px] w-full table-fixed text-[11px] leading-tight">
+                <table className="min-w-[2060px] w-full table-fixed text-[11px] leading-tight">
                   <WorkflowTableHeader
                     filters={filters}
+                    headerScope="standalone"
                     activeHeaderFilter={activeHeaderFilter}
+                    activeHeaderScope={activeHeaderScope}
                     setActiveHeaderFilter={setActiveHeaderFilter}
+                    setActiveHeaderScope={setActiveHeaderScope}
                     updateFilter={updateFilter}
                   />
                   <tbody>
