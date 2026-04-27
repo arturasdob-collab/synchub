@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -264,6 +264,10 @@ const WORKFLOW_COLUMN_MIN_WIDTHS = WORKFLOW_COLUMN_CONFIG.reduce(
   {} as WorkflowColumnWidths
 );
 
+const DEFAULT_WORKFLOW_ROW_HEIGHT = 24;
+const MIN_WORKFLOW_ROW_HEIGHT = 20;
+const MAX_WORKFLOW_ROW_HEIGHT = 34;
+
 function formatStatusLabel(value: string | null | undefined) {
   if (!value) return '-';
 
@@ -344,7 +348,7 @@ function CompactCell({
     return (
       <div className="relative">
         <div
-          className={`workflow-scrollbar flex h-6 items-center overflow-x-auto overflow-y-hidden whitespace-nowrap rounded-md px-2 leading-none ${cellClasses} ${canAcknowledge ? 'pr-6' : ''}`}
+          className={`workflow-scrollbar workflow-compact-cell flex items-center overflow-x-auto overflow-y-hidden whitespace-nowrap rounded-md px-2 leading-none ${cellClasses} ${canAcknowledge ? 'pr-6' : ''}`}
           title={content}
         >
           {content}
@@ -354,13 +358,13 @@ function CompactCell({
             type="button"
             onClick={(event) => {
               event.stopPropagation();
-              onAcknowledge();
-            }}
-            className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full bg-emerald-500 p-0.5 text-white shadow-sm hover:bg-emerald-600"
+            onAcknowledge();
+          }}
+            className="workflow-ack-button absolute right-1 top-1/2 -translate-y-1/2 rounded-full bg-emerald-500 text-white shadow-sm hover:bg-emerald-600"
             aria-label="Acknowledge field update"
             title="Acknowledge field update"
           >
-            <Check className="h-2.5 w-2.5" />
+            <Check className="workflow-ack-icon" />
           </button>
         ) : null}
       </div>
@@ -370,7 +374,7 @@ function CompactCell({
   return (
     <div className="relative">
       <div
-        className={`flex h-6 items-center truncate rounded-md px-2 leading-none ${pendingAck ? 'bg-slate-800 text-white' : 'text-slate-900'} ${canAcknowledge ? 'pr-6' : ''}`}
+        className={`workflow-compact-cell flex items-center truncate rounded-md px-2 leading-none ${pendingAck ? 'bg-slate-800 text-white' : 'text-slate-900'} ${canAcknowledge ? 'pr-6' : ''}`}
         title={content}
       >
         {content}
@@ -380,13 +384,13 @@ function CompactCell({
           type="button"
           onClick={(event) => {
             event.stopPropagation();
-            onAcknowledge();
-          }}
-          className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full bg-emerald-500 p-0.5 text-white shadow-sm hover:bg-emerald-600"
+          onAcknowledge();
+        }}
+          className="workflow-ack-button absolute right-1 top-1/2 -translate-y-1/2 rounded-full bg-emerald-500 text-white shadow-sm hover:bg-emerald-600"
           aria-label="Acknowledge field update"
           title="Acknowledge field update"
         >
-          <Check className="h-2.5 w-2.5" />
+          <Check className="workflow-ack-icon" />
         </button>
       ) : null}
     </div>
@@ -997,7 +1001,7 @@ function WorkflowDisplayCell({
               onCancelEdit?.();
             }
           }}
-          className="h-6 w-full rounded-md border border-sky-400 bg-white px-1 text-[11px] leading-none outline-none ring-1 ring-sky-200"
+          className="workflow-edit-input w-full rounded-md border border-sky-400 bg-white px-1 leading-none outline-none ring-1 ring-sky-200"
         >
           {selectOptions.map((option) => (
             <option key={option.value} value={option.value}>
@@ -1025,7 +1029,7 @@ function WorkflowDisplayCell({
             onCancelEdit?.();
           }
         }}
-        className="h-6 w-full rounded-md border border-sky-400 bg-white px-2 text-[11px] leading-none outline-none ring-1 ring-sky-200"
+        className="workflow-edit-input w-full rounded-md border border-sky-400 bg-white px-2 leading-none outline-none ring-1 ring-sky-200"
       />
     );
   }
@@ -1830,6 +1834,8 @@ export default function WorkflowPage() {
     DEFAULT_WORKFLOW_COLUMN_WIDTHS
   );
   const [columnWidthsHydrated, setColumnWidthsHydrated] = useState(false);
+  const [rowHeightPx, setRowHeightPx] = useState(DEFAULT_WORKFLOW_ROW_HEIGHT);
+  const [rowHeightHydrated, setRowHeightHydrated] = useState(false);
   const [activeHeaderFilter, setActiveHeaderFilter] =
     useState<WorkflowHeaderFilterId | null>(null);
   const [activeHeaderScope, setActiveHeaderScope] = useState<string | null>(null);
@@ -1837,6 +1843,10 @@ export default function WorkflowPage() {
     columnId: WorkflowColumnId;
     startX: number;
     startWidth: number;
+  } | null>(null);
+  const [resizingRowHeight, setResizingRowHeight] = useState<{
+    startY: number;
+    startHeight: number;
   } | null>(null);
   const [organizations, setOrganizations] = useState<OrganizationOption[]>([]);
   const [managers, setManagers] = useState<ManagerOption[]>([]);
@@ -1940,6 +1950,48 @@ export default function WorkflowPage() {
   }, [columnWidths, columnWidthsHydrated, viewerUserId]);
 
   useEffect(() => {
+    if (!viewerUserId) {
+      return;
+    }
+
+    try {
+      const saved = window.localStorage.getItem(
+        `synchub.workflow.row-height.${viewerUserId}`
+      );
+
+      if (!saved) {
+        setRowHeightPx(DEFAULT_WORKFLOW_ROW_HEIGHT);
+      } else {
+        const parsed = Number(saved);
+        setRowHeightPx(
+          Number.isFinite(parsed)
+            ? Math.max(
+                MIN_WORKFLOW_ROW_HEIGHT,
+                Math.min(MAX_WORKFLOW_ROW_HEIGHT, Math.round(parsed))
+              )
+            : DEFAULT_WORKFLOW_ROW_HEIGHT
+        );
+      }
+    } catch (error) {
+      console.error('Failed to hydrate workflow row height:', error);
+      setRowHeightPx(DEFAULT_WORKFLOW_ROW_HEIGHT);
+    } finally {
+      setRowHeightHydrated(true);
+    }
+  }, [viewerUserId]);
+
+  useEffect(() => {
+    if (!viewerUserId || !rowHeightHydrated) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      `synchub.workflow.row-height.${viewerUserId}`,
+      String(rowHeightPx)
+    );
+  }, [rowHeightHydrated, rowHeightPx, viewerUserId]);
+
+  useEffect(() => {
     const handleOutsideClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
 
@@ -1990,6 +2042,40 @@ export default function WorkflowPage() {
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [resizingColumn]);
+
+  useEffect(() => {
+    if (!resizingRowHeight) {
+      return;
+    }
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const nextHeight = Math.max(
+        MIN_WORKFLOW_ROW_HEIGHT,
+        Math.min(
+          MAX_WORKFLOW_ROW_HEIGHT,
+          Math.round(resizingRowHeight.startHeight + (event.clientY - resizingRowHeight.startY))
+        )
+      );
+
+      setRowHeightPx(nextHeight);
+    };
+
+    const handleMouseUp = () => {
+      setResizingRowHeight(null);
+    };
+
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [resizingRowHeight]);
 
   useEffect(() => {
     if (!viewerIsElevated) {
@@ -2094,6 +2180,18 @@ export default function WorkflowPage() {
     [columnWidths]
   );
 
+  const workflowDensityStyle = useMemo(
+    () =>
+      ({
+        '--workflow-cell-height': `${rowHeightPx}px`,
+        '--workflow-cell-font-size': rowHeightPx <= 22 ? '10px' : '11px',
+        '--workflow-ack-icon-size':
+          rowHeightPx <= 22 ? '9px' : rowHeightPx >= 30 ? '11px' : '10px',
+        '--workflow-ack-padding': rowHeightPx <= 22 ? '1px' : '2px',
+      }) as CSSProperties,
+    [rowHeightPx]
+  );
+
   const startColumnResize = (columnId: WorkflowColumnId, clientX: number) => {
     setActiveHeaderFilter(null);
     setActiveHeaderScope(null);
@@ -2109,6 +2207,13 @@ export default function WorkflowPage() {
       ...prev,
       [columnId]: DEFAULT_WORKFLOW_COLUMN_WIDTHS[columnId],
     }));
+  };
+
+  const startRowHeightResize = (clientY: number) => {
+    setResizingRowHeight({
+      startY: clientY,
+      startHeight: rowHeightPx,
+    });
   };
 
   const acknowledgeWorkflowField = async (
@@ -2423,8 +2528,37 @@ export default function WorkflowPage() {
   const showSelectManagerState = viewerIsElevated && !selectedManagerUserId;
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div
+      className="workflow-density p-6 max-w-7xl mx-auto space-y-6"
+      style={workflowDensityStyle}
+    >
       <style jsx global>{`
+        .workflow-density {
+          --workflow-cell-height: ${DEFAULT_WORKFLOW_ROW_HEIGHT}px;
+          --workflow-cell-font-size: 11px;
+          --workflow-ack-icon-size: 10px;
+          --workflow-ack-padding: 2px;
+        }
+
+        .workflow-compact-cell {
+          height: var(--workflow-cell-height);
+          font-size: var(--workflow-cell-font-size);
+        }
+
+        .workflow-edit-input {
+          height: var(--workflow-cell-height);
+          font-size: var(--workflow-cell-font-size);
+        }
+
+        .workflow-ack-button {
+          padding: var(--workflow-ack-padding);
+        }
+
+        .workflow-ack-icon {
+          width: var(--workflow-ack-icon-size);
+          height: var(--workflow-ack-icon-size);
+        }
+
         .workflow-scrollbar {
           scrollbar-width: thin;
           scrollbar-color: #cbd5e1 transparent;
@@ -2518,6 +2652,21 @@ export default function WorkflowPage() {
             </button>
           </div>
         )}
+
+        <div className="flex justify-center">
+          <div
+            role="separator"
+            aria-label="Drag to resize workflow row height"
+            title="Drag to resize workflow row height"
+            onMouseDown={(event) => {
+              event.preventDefault();
+              startRowHeightResize(event.clientY);
+            }}
+            className="group flex h-5 w-24 cursor-row-resize items-center justify-center"
+          >
+            <div className="h-1.5 w-12 rounded-full bg-slate-200 transition group-hover:bg-sky-300" />
+          </div>
+        </div>
       </div>
 
       <div className="space-y-4">
