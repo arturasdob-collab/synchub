@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -186,6 +186,10 @@ type WorkflowHeaderFilterId =
   | 'profit'
   | 'trip_vehicle';
 
+type WorkflowColumnId = WorkflowHeaderFilterId;
+
+type WorkflowColumnWidths = Record<WorkflowColumnId, number>;
+
 const DEFAULT_FILTERS: WorkflowFilters = {
   search: '',
   status: 'all',
@@ -216,6 +220,49 @@ const WORKFLOW_STATUS_OPTIONS = WORKFLOW_EXECUTION_STATUSES.map((status) => ({
   value: status,
   label: WORKFLOW_EXECUTION_STATUS_LABELS[status],
 }));
+
+const WORKFLOW_COLUMN_CONFIG = [
+  { id: 'status', defaultWidth: 84, minWidth: 70 },
+  { id: 'prep', defaultWidth: 88, minWidth: 74 },
+  { id: 'delivery', defaultWidth: 92, minWidth: 78 },
+  { id: 'record_number', defaultWidth: 170, minWidth: 130 },
+  { id: 'kind', defaultWidth: 96, minWidth: 84 },
+  { id: 'company', defaultWidth: 170, minWidth: 130 },
+  { id: 'contact', defaultWidth: 170, minWidth: 130 },
+  { id: 'sender', defaultWidth: 150, minWidth: 120 },
+  { id: 'loading', defaultWidth: 220, minWidth: 160 },
+  { id: 'loading_customs', defaultWidth: 140, minWidth: 110 },
+  { id: 'receiver', defaultWidth: 150, minWidth: 120 },
+  { id: 'unloading', defaultWidth: 220, minWidth: 160 },
+  { id: 'unloading_customs', defaultWidth: 140, minWidth: 110 },
+  { id: 'cargo', defaultWidth: 170, minWidth: 130 },
+  { id: 'kg', defaultWidth: 82, minWidth: 70 },
+  { id: 'ldm', defaultWidth: 82, minWidth: 70 },
+  { id: 'revenue', defaultWidth: 94, minWidth: 80 },
+  { id: 'cost', defaultWidth: 94, minWidth: 80 },
+  { id: 'profit', defaultWidth: 94, minWidth: 80 },
+  { id: 'trip_vehicle', defaultWidth: 230, minWidth: 160 },
+] as const satisfies ReadonlyArray<{
+  id: WorkflowColumnId;
+  defaultWidth: number;
+  minWidth: number;
+}>;
+
+const DEFAULT_WORKFLOW_COLUMN_WIDTHS = WORKFLOW_COLUMN_CONFIG.reduce(
+  (acc, column) => {
+    acc[column.id] = column.defaultWidth;
+    return acc;
+  },
+  {} as WorkflowColumnWidths
+);
+
+const WORKFLOW_COLUMN_MIN_WIDTHS = WORKFLOW_COLUMN_CONFIG.reduce(
+  (acc, column) => {
+    acc[column.id] = column.minWidth;
+    return acc;
+  },
+  {} as WorkflowColumnWidths
+);
 
 function formatStatusLabel(value: string | null | undefined) {
   if (!value) return '-';
@@ -675,6 +722,60 @@ function HeaderFilterButton({
   );
 }
 
+function WorkflowColGroup({
+  columnWidths,
+}: {
+  columnWidths: WorkflowColumnWidths;
+}) {
+  return (
+    <colgroup>
+      {WORKFLOW_COLUMN_CONFIG.map((column) => (
+        <col
+          key={column.id}
+          style={{ width: `${columnWidths[column.id] ?? column.defaultWidth}px` }}
+        />
+      ))}
+    </colgroup>
+  );
+}
+
+function WorkflowHeaderCell({
+  columnId,
+  children,
+  onStartResize,
+  onResetColumnWidth,
+}: {
+  columnId: WorkflowColumnId;
+  children: ReactNode;
+  onStartResize: (columnId: WorkflowColumnId, clientX: number) => void;
+  onResetColumnWidth: (columnId: WorkflowColumnId) => void;
+}) {
+  return (
+    <th
+      className="relative px-1 py-1.5 text-left align-top"
+      data-workflow-header-filter-root="true"
+    >
+      <div className="pr-3">{children}</div>
+      <button
+        type="button"
+        onMouseDown={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onStartResize(columnId, event.clientX);
+        }}
+        onDoubleClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onResetColumnWidth(columnId);
+        }}
+        className="absolute right-0 top-0 h-full w-2 cursor-col-resize touch-none border-r border-slate-200/70 bg-transparent transition hover:border-sky-300 hover:bg-sky-100/40"
+        aria-label={`Resize ${columnId} column`}
+        title="Drag to resize, double click to reset"
+      />
+    </th>
+  );
+}
+
 function WorkflowTableHeader({
   filters,
   headerScope,
@@ -683,6 +784,8 @@ function WorkflowTableHeader({
   setActiveHeaderFilter,
   setActiveHeaderScope,
   updateFilter,
+  onStartResize,
+  onResetColumnWidth,
 }: {
   filters: WorkflowFilters;
   headerScope: string;
@@ -691,6 +794,8 @@ function WorkflowTableHeader({
   setActiveHeaderFilter: (value: WorkflowHeaderFilterId | null) => void;
   setActiveHeaderScope: (value: string | null) => void;
   updateFilter: <K extends keyof WorkflowFilters>(key: K, value: WorkflowFilters[K]) => void;
+  onStartResize: (columnId: WorkflowColumnId, clientX: number) => void;
+  onResetColumnWidth: (columnId: WorkflowColumnId) => void;
 }) {
   const toggleFilter = (filterId: WorkflowHeaderFilterId) => {
     const isSameFilter =
@@ -710,7 +815,11 @@ function WorkflowTableHeader({
     widthClass = 'w-40',
     placeholder = 'Filter value'
   ) => (
-    <th className="px-1 py-1.5 text-left align-top" data-workflow-header-filter-root="true">
+    <WorkflowHeaderCell
+      columnId={filterId}
+      onStartResize={onStartResize}
+      onResetColumnWidth={onResetColumnWidth}
+    >
       <div className="relative">
         <HeaderFilterButton
           label={label}
@@ -732,13 +841,17 @@ function WorkflowTableHeader({
           </div>
         ) : null}
       </div>
-    </th>
+    </WorkflowHeaderCell>
   );
 
   return (
     <thead className="border-b bg-slate-50">
       <tr>
-        <th className="px-1 py-1.5 text-left align-top" data-workflow-header-filter-root="true">
+        <WorkflowHeaderCell
+          columnId="status"
+          onStartResize={onStartResize}
+          onResetColumnWidth={onResetColumnWidth}
+        >
           <div className="relative">
             <HeaderFilterButton
               label="Status"
@@ -762,8 +875,12 @@ function WorkflowTableHeader({
               </div>
             ) : null}
           </div>
-        </th>
-        <th className="px-1 py-1.5 text-left align-top" data-workflow-header-filter-root="true">
+        </WorkflowHeaderCell>
+        <WorkflowHeaderCell
+          columnId="prep"
+          onStartResize={onStartResize}
+          onResetColumnWidth={onResetColumnWidth}
+        >
           <div className="relative">
             <HeaderFilterButton
               label="Prep"
@@ -787,8 +904,12 @@ function WorkflowTableHeader({
               </div>
             ) : null}
           </div>
-        </th>
-        <th className="px-1 py-1.5 text-left align-top" data-workflow-header-filter-root="true">
+        </WorkflowHeaderCell>
+        <WorkflowHeaderCell
+          columnId="delivery"
+          onStartResize={onStartResize}
+          onResetColumnWidth={onResetColumnWidth}
+        >
           <div className="relative">
             <HeaderFilterButton
               label="Delivery"
@@ -812,7 +933,7 @@ function WorkflowTableHeader({
               </div>
             ) : null}
           </div>
-        </th>
+        </WorkflowHeaderCell>
         {renderTextFilter('record_number', 'No. / Trip', 'recordNumber', 'w-44', 'Order, client or trip no.')}
         {renderTextFilter('kind', 'Kind', 'kind', 'w-32', 'Kind')}
         {renderTextFilter('company', 'Company', 'company', 'w-40', 'Company')}
@@ -1395,6 +1516,10 @@ function GroupageBlock({
   setActiveHeaderFilter,
   setActiveHeaderScope,
   updateFilter,
+  columnWidths,
+  workflowTableMinWidth,
+  onStartResize,
+  onResetColumnWidth,
   editingCell,
   editingValue,
   onStartEdit,
@@ -1418,6 +1543,10 @@ function GroupageBlock({
   setActiveHeaderFilter: (value: WorkflowHeaderFilterId | null) => void;
   setActiveHeaderScope: (value: string | null) => void;
   updateFilter: <K extends keyof WorkflowFilters>(key: K, value: WorkflowFilters[K]) => void;
+  columnWidths: WorkflowColumnWidths;
+  workflowTableMinWidth: number;
+  onStartResize: (columnId: WorkflowColumnId, clientX: number) => void;
+  onResetColumnWidth: (columnId: WorkflowColumnId) => void;
   editingCell: WorkflowEditingCell | null;
   editingValue: string;
   onStartEdit: (
@@ -1463,7 +1592,11 @@ function GroupageBlock({
 
   return (
     <div className="overflow-x-auto rounded-xl border">
-      <table className="min-w-[2060px] w-full table-fixed text-[11px] leading-tight">
+      <table
+        className="w-full table-fixed text-[11px] leading-tight"
+        style={{ minWidth: `${workflowTableMinWidth}px` }}
+      >
+        <WorkflowColGroup columnWidths={columnWidths} />
         <WorkflowTableHeader
           filters={filters}
           headerScope={headerScope}
@@ -1472,6 +1605,8 @@ function GroupageBlock({
           setActiveHeaderFilter={setActiveHeaderFilter}
           setActiveHeaderScope={setActiveHeaderScope}
           updateFilter={updateFilter}
+          onStartResize={onStartResize}
+          onResetColumnWidth={onResetColumnWidth}
         />
         <tbody>
           <tr className="border-b-2 border-amber-300 bg-amber-100/70">
@@ -1691,9 +1826,18 @@ export default function WorkflowPage() {
   const [standaloneRows, setStandaloneRows] = useState<WorkflowStandaloneRow[]>([]);
   const [filters, setFilters] = useState<WorkflowFilters>(DEFAULT_FILTERS);
   const [filtersHydrated, setFiltersHydrated] = useState(false);
+  const [columnWidths, setColumnWidths] = useState<WorkflowColumnWidths>(
+    DEFAULT_WORKFLOW_COLUMN_WIDTHS
+  );
+  const [columnWidthsHydrated, setColumnWidthsHydrated] = useState(false);
   const [activeHeaderFilter, setActiveHeaderFilter] =
     useState<WorkflowHeaderFilterId | null>(null);
   const [activeHeaderScope, setActiveHeaderScope] = useState<string | null>(null);
+  const [resizingColumn, setResizingColumn] = useState<{
+    columnId: WorkflowColumnId;
+    startX: number;
+    startWidth: number;
+  } | null>(null);
   const [organizations, setOrganizations] = useState<OrganizationOption[]>([]);
   const [managers, setManagers] = useState<ManagerOption[]>([]);
   const [selectedOrganizationId, setSelectedOrganizationId] = useState('');
@@ -1748,6 +1892,54 @@ export default function WorkflowPage() {
   }, [filters, filtersHydrated, viewerUserId]);
 
   useEffect(() => {
+    if (!viewerUserId) {
+      return;
+    }
+
+    try {
+      const saved = window.localStorage.getItem(
+        `synchub.workflow.column-widths.${viewerUserId}`
+      );
+
+      if (!saved) {
+        setColumnWidths(DEFAULT_WORKFLOW_COLUMN_WIDTHS);
+        return;
+      }
+
+      const parsed = JSON.parse(saved) as Partial<WorkflowColumnWidths>;
+      const nextWidths = { ...DEFAULT_WORKFLOW_COLUMN_WIDTHS };
+
+      for (const column of WORKFLOW_COLUMN_CONFIG) {
+        const rawWidth = parsed[column.id];
+        if (typeof rawWidth === 'number' && Number.isFinite(rawWidth)) {
+          nextWidths[column.id] = Math.max(
+            WORKFLOW_COLUMN_MIN_WIDTHS[column.id],
+            Math.round(rawWidth)
+          );
+        }
+      }
+
+      setColumnWidths(nextWidths);
+    } catch (error) {
+      console.error('Failed to hydrate workflow column widths:', error);
+      setColumnWidths(DEFAULT_WORKFLOW_COLUMN_WIDTHS);
+    } finally {
+      setColumnWidthsHydrated(true);
+    }
+  }, [viewerUserId]);
+
+  useEffect(() => {
+    if (!viewerUserId || !columnWidthsHydrated) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      `synchub.workflow.column-widths.${viewerUserId}`,
+      JSON.stringify(columnWidths)
+    );
+  }, [columnWidths, columnWidthsHydrated, viewerUserId]);
+
+  useEffect(() => {
     const handleOutsideClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
 
@@ -1763,6 +1955,41 @@ export default function WorkflowPage() {
       document.removeEventListener('mousedown', handleOutsideClick);
     };
   }, []);
+
+  useEffect(() => {
+    if (!resizingColumn) {
+      return;
+    }
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const minWidth = WORKFLOW_COLUMN_MIN_WIDTHS[resizingColumn.columnId];
+      const nextWidth = Math.max(
+        minWidth,
+        Math.round(resizingColumn.startWidth + (event.clientX - resizingColumn.startX))
+      );
+
+      setColumnWidths((prev) => ({
+        ...prev,
+        [resizingColumn.columnId]: nextWidth,
+      }));
+    };
+
+    const handleMouseUp = () => {
+      setResizingColumn(null);
+    };
+
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [resizingColumn]);
 
   useEffect(() => {
     if (!viewerIsElevated) {
@@ -1861,6 +2088,28 @@ export default function WorkflowPage() {
     !!viewerUserId &&
     !!effectiveManagerUserId &&
     viewerUserId === effectiveManagerUserId;
+
+  const workflowTableMinWidth = useMemo(
+    () => Object.values(columnWidths).reduce((sum, width) => sum + width, 0),
+    [columnWidths]
+  );
+
+  const startColumnResize = (columnId: WorkflowColumnId, clientX: number) => {
+    setActiveHeaderFilter(null);
+    setActiveHeaderScope(null);
+    setResizingColumn({
+      columnId,
+      startX: clientX,
+      startWidth: columnWidths[columnId] ?? DEFAULT_WORKFLOW_COLUMN_WIDTHS[columnId],
+    });
+  };
+
+  const resetColumnWidth = (columnId: WorkflowColumnId) => {
+    setColumnWidths((prev) => ({
+      ...prev,
+      [columnId]: DEFAULT_WORKFLOW_COLUMN_WIDTHS[columnId],
+    }));
+  };
 
   const acknowledgeWorkflowField = async (
     recordType: 'order' | 'trip',
@@ -2301,6 +2550,10 @@ export default function WorkflowPage() {
                 setActiveHeaderFilter={setActiveHeaderFilter}
                 setActiveHeaderScope={setActiveHeaderScope}
                 updateFilter={updateFilter}
+                columnWidths={columnWidths}
+                workflowTableMinWidth={workflowTableMinWidth}
+                onStartResize={startColumnResize}
+                onResetColumnWidth={resetColumnWidth}
                 editingCell={editingCell}
                 editingValue={editingValue}
                 onStartEdit={startEditingCell}
@@ -2312,7 +2565,11 @@ export default function WorkflowPage() {
 
             {filteredData.rows.length > 0 ? (
               <div className="overflow-x-auto rounded-2xl border bg-white">
-                <table className="min-w-[2060px] w-full table-fixed text-[11px] leading-tight">
+                <table
+                  className="w-full table-fixed text-[11px] leading-tight"
+                  style={{ minWidth: `${workflowTableMinWidth}px` }}
+                >
+                  <WorkflowColGroup columnWidths={columnWidths} />
                   <WorkflowTableHeader
                     filters={filters}
                     headerScope="standalone"
@@ -2321,6 +2578,8 @@ export default function WorkflowPage() {
                     setActiveHeaderFilter={setActiveHeaderFilter}
                     setActiveHeaderScope={setActiveHeaderScope}
                     updateFilter={updateFilter}
+                    onStartResize={startColumnResize}
+                    onResetColumnWidth={resetColumnWidth}
                   />
                   <tbody>
                     {filteredData.rows.map((row) => (
