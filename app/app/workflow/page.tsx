@@ -189,6 +189,7 @@ type WorkflowHeaderFilterId =
 type WorkflowColumnId = WorkflowHeaderFilterId;
 
 type WorkflowColumnWidths = Record<WorkflowColumnId, number>;
+type WorkflowRowHeights = Record<string, number>;
 
 const DEFAULT_FILTERS: WorkflowFilters = {
   search: '',
@@ -222,26 +223,26 @@ const WORKFLOW_STATUS_OPTIONS = WORKFLOW_EXECUTION_STATUSES.map((status) => ({
 }));
 
 const WORKFLOW_COLUMN_CONFIG = [
-  { id: 'status', defaultWidth: 84, minWidth: 70 },
-  { id: 'prep', defaultWidth: 88, minWidth: 74 },
-  { id: 'delivery', defaultWidth: 92, minWidth: 78 },
-  { id: 'record_number', defaultWidth: 170, minWidth: 130 },
-  { id: 'kind', defaultWidth: 96, minWidth: 84 },
-  { id: 'company', defaultWidth: 170, minWidth: 130 },
-  { id: 'contact', defaultWidth: 170, minWidth: 130 },
-  { id: 'sender', defaultWidth: 150, minWidth: 120 },
-  { id: 'loading', defaultWidth: 220, minWidth: 160 },
-  { id: 'loading_customs', defaultWidth: 140, minWidth: 110 },
-  { id: 'receiver', defaultWidth: 150, minWidth: 120 },
-  { id: 'unloading', defaultWidth: 220, minWidth: 160 },
-  { id: 'unloading_customs', defaultWidth: 140, minWidth: 110 },
-  { id: 'cargo', defaultWidth: 170, minWidth: 130 },
-  { id: 'kg', defaultWidth: 82, minWidth: 70 },
-  { id: 'ldm', defaultWidth: 82, minWidth: 70 },
-  { id: 'revenue', defaultWidth: 94, minWidth: 80 },
-  { id: 'cost', defaultWidth: 94, minWidth: 80 },
-  { id: 'profit', defaultWidth: 94, minWidth: 80 },
-  { id: 'trip_vehicle', defaultWidth: 230, minWidth: 160 },
+  { id: 'status', defaultWidth: 84, minWidth: 52 },
+  { id: 'prep', defaultWidth: 88, minWidth: 64 },
+  { id: 'delivery', defaultWidth: 92, minWidth: 64 },
+  { id: 'record_number', defaultWidth: 170, minWidth: 96 },
+  { id: 'kind', defaultWidth: 96, minWidth: 64 },
+  { id: 'company', defaultWidth: 170, minWidth: 96 },
+  { id: 'contact', defaultWidth: 170, minWidth: 96 },
+  { id: 'sender', defaultWidth: 150, minWidth: 96 },
+  { id: 'loading', defaultWidth: 220, minWidth: 110 },
+  { id: 'loading_customs', defaultWidth: 140, minWidth: 88 },
+  { id: 'receiver', defaultWidth: 150, minWidth: 96 },
+  { id: 'unloading', defaultWidth: 220, minWidth: 110 },
+  { id: 'unloading_customs', defaultWidth: 140, minWidth: 88 },
+  { id: 'cargo', defaultWidth: 170, minWidth: 96 },
+  { id: 'kg', defaultWidth: 82, minWidth: 52 },
+  { id: 'ldm', defaultWidth: 82, minWidth: 52 },
+  { id: 'revenue', defaultWidth: 94, minWidth: 64 },
+  { id: 'cost', defaultWidth: 94, minWidth: 64 },
+  { id: 'profit', defaultWidth: 94, minWidth: 64 },
+  { id: 'trip_vehicle', defaultWidth: 230, minWidth: 110 },
 ] as const satisfies ReadonlyArray<{
   id: WorkflowColumnId;
   defaultWidth: number;
@@ -265,8 +266,8 @@ const WORKFLOW_COLUMN_MIN_WIDTHS = WORKFLOW_COLUMN_CONFIG.reduce(
 );
 
 const DEFAULT_WORKFLOW_ROW_HEIGHT = 24;
-const MIN_WORKFLOW_ROW_HEIGHT = 20;
-const MAX_WORKFLOW_ROW_HEIGHT = 34;
+const MIN_WORKFLOW_ROW_HEIGHT = 18;
+const MAX_WORKFLOW_ROW_HEIGHT = 180;
 
 function formatStatusLabel(value: string | null | undefined) {
   if (!value) return '-';
@@ -348,7 +349,7 @@ function CompactCell({
     return (
       <div className="relative">
         <div
-          className={`workflow-scrollbar workflow-compact-cell flex items-center overflow-x-auto overflow-y-hidden whitespace-nowrap rounded-md px-2 leading-none ${cellClasses} ${canAcknowledge ? 'pr-6' : ''}`}
+          className={`workflow-scrollbar workflow-compact-cell workflow-wrap-cell overflow-auto rounded-md px-2 py-1 leading-tight ${cellClasses} ${canAcknowledge ? 'pr-6' : ''}`}
           title={content}
         >
           {content}
@@ -780,6 +781,37 @@ function WorkflowHeaderCell({
   );
 }
 
+function WorkflowRowResizeHandle({
+  onStartResize,
+  onResetHeight,
+}: {
+  onStartResize: (clientY: number) => void;
+  onResetHeight: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onMouseDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onStartResize(event.clientY);
+      }}
+      onDoubleClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onResetHeight();
+      }}
+      className="absolute -bottom-1 left-0 z-10 h-3 w-full cursor-row-resize touch-none bg-transparent"
+      aria-label="Resize workflow row height"
+      title="Drag to resize row, double click to reset"
+    >
+      <span className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-sky-200 bg-white/95 px-1 text-[10px] leading-none text-sky-600 opacity-0 shadow-sm transition group-hover/row-resize:opacity-100">
+        ↕
+      </span>
+    </button>
+  );
+}
+
 function WorkflowTableHeader({
   filters,
   headerScope,
@@ -1063,6 +1095,9 @@ function WorkflowStandaloneRowView({
   onChangeEditingValue,
   onSubmitEdit,
   onCancelEdit,
+  rowStyle,
+  onStartResizeRow,
+  onResetRowHeight,
 }: {
   row: WorkflowStandaloneRow;
   onOpenOrder: (orderId: string) => void;
@@ -1082,6 +1117,9 @@ function WorkflowStandaloneRowView({
   onChangeEditingValue: (value: string) => void;
   onSubmitEdit: () => void;
   onCancelEdit: () => void;
+  rowStyle?: CSSProperties;
+  onStartResizeRow: (rowId: string, clientY: number) => void;
+  onResetRowHeight: (rowId: string) => void;
 }) {
   const acknowledge = (
     state: WorkflowFieldState | null | undefined
@@ -1127,8 +1165,8 @@ function WorkflowStandaloneRowView({
   const canEditStatus = allowAcknowledge && !!statusCell;
 
   return (
-    <tr className="border-b hover:bg-slate-50">
-      <td className="px-2 py-1.5 whitespace-nowrap">
+    <tr className="border-b hover:bg-slate-50" style={rowStyle}>
+      <td className="group/row-resize relative px-2 py-1.5 whitespace-nowrap">
         <WorkflowDisplayCell
           value={formatStatusLabel(row.status)}
           state={row.field_states.status}
@@ -1145,6 +1183,10 @@ function WorkflowStandaloneRowView({
           onSubmitEdit={onSubmitEdit}
           onCancelEdit={onCancelEdit}
           selectOptions={WORKFLOW_STATUS_OPTIONS}
+        />
+        <WorkflowRowResizeHandle
+          onStartResize={(clientY) => onStartResizeRow(row.id, clientY)}
+          onResetHeight={() => onResetRowHeight(row.id)}
         />
       </td>
       <td className="px-2 py-1.5 whitespace-nowrap">
@@ -1524,6 +1566,9 @@ function GroupageBlock({
   workflowTableMinWidth,
   onStartResize,
   onResetColumnWidth,
+  getRowStyle,
+  onStartResizeRow,
+  onResetRowHeight,
   editingCell,
   editingValue,
   onStartEdit,
@@ -1551,6 +1596,9 @@ function GroupageBlock({
   workflowTableMinWidth: number;
   onStartResize: (columnId: WorkflowColumnId, clientX: number) => void;
   onResetColumnWidth: (columnId: WorkflowColumnId) => void;
+  getRowStyle: (rowId: string) => CSSProperties | undefined;
+  onStartResizeRow: (rowId: string, clientY: number) => void;
+  onResetRowHeight: (rowId: string) => void;
   editingCell: WorkflowEditingCell | null;
   editingValue: string;
   onStartEdit: (
@@ -1613,8 +1661,11 @@ function GroupageBlock({
           onResetColumnWidth={onResetColumnWidth}
         />
         <tbody>
-          <tr className="border-b-2 border-amber-300 bg-amber-100/70">
-            <td className="px-2 py-1 whitespace-nowrap">
+          <tr
+            className="border-b-2 border-amber-300 bg-amber-100/70"
+            style={getRowStyle(group.id)}
+          >
+            <td className="group/row-resize relative px-2 py-1 whitespace-nowrap">
               <WorkflowDisplayCell
                 value={formatStatusLabel(group.trip_status)}
                 state={group.field_states.status}
@@ -1635,6 +1686,10 @@ function GroupageBlock({
                 onSubmitEdit={onSubmitEdit}
                 onCancelEdit={onCancelEdit}
                 selectOptions={WORKFLOW_STATUS_OPTIONS}
+              />
+              <WorkflowRowResizeHandle
+                onStartResize={(clientY) => onStartResizeRow(group.id, clientY)}
+                onResetHeight={() => onResetRowHeight(group.id)}
               />
             </td>
             <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
@@ -1740,11 +1795,23 @@ function GroupageBlock({
               onChangeEditingValue={onChangeEditingValue}
               onSubmitEdit={onSubmitEdit}
               onCancelEdit={onCancelEdit}
+              rowStyle={getRowStyle(row.id)}
+              onStartResizeRow={onStartResizeRow}
+              onResetRowHeight={onResetRowHeight}
             />
           ))}
 
-          <tr className="border-t-2 border-amber-300 bg-amber-100/70 font-medium">
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
+          <tr
+            className="border-t-2 border-amber-300 bg-amber-100/70 font-medium"
+            style={getRowStyle(group.footer.id)}
+          >
+            <td className="group/row-resize relative px-2 py-1 whitespace-nowrap">
+              <CompactCell value="-" />
+              <WorkflowRowResizeHandle
+                onStartResize={(clientY) => onStartResizeRow(group.footer.id, clientY)}
+                onResetHeight={() => onResetRowHeight(group.footer.id)}
+              />
+            </td>
             <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
             <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
             <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="Summary" /></td>
@@ -1834,7 +1901,7 @@ export default function WorkflowPage() {
     DEFAULT_WORKFLOW_COLUMN_WIDTHS
   );
   const [columnWidthsHydrated, setColumnWidthsHydrated] = useState(false);
-  const [rowHeightPx, setRowHeightPx] = useState(DEFAULT_WORKFLOW_ROW_HEIGHT);
+  const [rowHeights, setRowHeights] = useState<WorkflowRowHeights>({});
   const [rowHeightHydrated, setRowHeightHydrated] = useState(false);
   const [activeHeaderFilter, setActiveHeaderFilter] =
     useState<WorkflowHeaderFilterId | null>(null);
@@ -1845,6 +1912,7 @@ export default function WorkflowPage() {
     startWidth: number;
   } | null>(null);
   const [resizingRowHeight, setResizingRowHeight] = useState<{
+    rowId: string;
     startY: number;
     startHeight: number;
   } | null>(null);
@@ -1956,25 +2024,29 @@ export default function WorkflowPage() {
 
     try {
       const saved = window.localStorage.getItem(
-        `synchub.workflow.row-height.${viewerUserId}`
+        `synchub.workflow.row-heights.${viewerUserId}`
       );
 
       if (!saved) {
-        setRowHeightPx(DEFAULT_WORKFLOW_ROW_HEIGHT);
+        setRowHeights({});
       } else {
-        const parsed = Number(saved);
-        setRowHeightPx(
-          Number.isFinite(parsed)
-            ? Math.max(
-                MIN_WORKFLOW_ROW_HEIGHT,
-                Math.min(MAX_WORKFLOW_ROW_HEIGHT, Math.round(parsed))
-              )
-            : DEFAULT_WORKFLOW_ROW_HEIGHT
-        );
+        const parsed = JSON.parse(saved) as Record<string, unknown>;
+        const nextHeights: WorkflowRowHeights = {};
+
+        for (const [rowId, rawHeight] of Object.entries(parsed)) {
+          if (typeof rawHeight === 'number' && Number.isFinite(rawHeight)) {
+            nextHeights[rowId] = Math.max(
+              MIN_WORKFLOW_ROW_HEIGHT,
+              Math.min(MAX_WORKFLOW_ROW_HEIGHT, Math.round(rawHeight))
+            );
+          }
+        }
+
+        setRowHeights(nextHeights);
       }
     } catch (error) {
-      console.error('Failed to hydrate workflow row height:', error);
-      setRowHeightPx(DEFAULT_WORKFLOW_ROW_HEIGHT);
+      console.error('Failed to hydrate workflow row heights:', error);
+      setRowHeights({});
     } finally {
       setRowHeightHydrated(true);
     }
@@ -1986,10 +2058,10 @@ export default function WorkflowPage() {
     }
 
     window.localStorage.setItem(
-      `synchub.workflow.row-height.${viewerUserId}`,
-      String(rowHeightPx)
+      `synchub.workflow.row-heights.${viewerUserId}`,
+      JSON.stringify(rowHeights)
     );
-  }, [rowHeightHydrated, rowHeightPx, viewerUserId]);
+  }, [rowHeightHydrated, rowHeights, viewerUserId]);
 
   useEffect(() => {
     const handleOutsideClick = (event: MouseEvent) => {
@@ -2057,7 +2129,10 @@ export default function WorkflowPage() {
         )
       );
 
-      setRowHeightPx(nextHeight);
+      setRowHeights((prev) => ({
+        ...prev,
+        [resizingRowHeight.rowId]: nextHeight,
+      }));
     };
 
     const handleMouseUp = () => {
@@ -2180,18 +2255,6 @@ export default function WorkflowPage() {
     [columnWidths]
   );
 
-  const workflowDensityStyle = useMemo(
-    () =>
-      ({
-        '--workflow-cell-height': `${rowHeightPx}px`,
-        '--workflow-cell-font-size': rowHeightPx <= 22 ? '10px' : '11px',
-        '--workflow-ack-icon-size':
-          rowHeightPx <= 22 ? '9px' : rowHeightPx >= 30 ? '11px' : '10px',
-        '--workflow-ack-padding': rowHeightPx <= 22 ? '1px' : '2px',
-      }) as CSSProperties,
-    [rowHeightPx]
-  );
-
   const startColumnResize = (columnId: WorkflowColumnId, clientX: number) => {
     setActiveHeaderFilter(null);
     setActiveHeaderScope(null);
@@ -2209,10 +2272,34 @@ export default function WorkflowPage() {
     }));
   };
 
-  const startRowHeightResize = (clientY: number) => {
+  const getRowStyle = (rowId: string): CSSProperties | undefined => {
+    const rowHeight = rowHeights[rowId];
+
+    if (!rowHeight) {
+      return undefined;
+    }
+
+    return {
+      '--workflow-cell-height': `${rowHeight}px`,
+      '--workflow-cell-font-size': rowHeight <= 22 ? '10px' : '11px',
+      '--workflow-ack-icon-size': rowHeight <= 22 ? '9px' : rowHeight >= 30 ? '11px' : '10px',
+      '--workflow-ack-padding': rowHeight <= 22 ? '1px' : '2px',
+    } as CSSProperties;
+  };
+
+  const startRowHeightResize = (rowId: string, clientY: number) => {
     setResizingRowHeight({
+      rowId,
       startY: clientY,
-      startHeight: rowHeightPx,
+      startHeight: rowHeights[rowId] ?? DEFAULT_WORKFLOW_ROW_HEIGHT,
+    });
+  };
+
+  const resetRowHeight = (rowId: string) => {
+    setRowHeights((prev) => {
+      const next = { ...prev };
+      delete next[rowId];
+      return next;
     });
   };
 
@@ -2528,10 +2615,7 @@ export default function WorkflowPage() {
   const showSelectManagerState = viewerIsElevated && !selectedManagerUserId;
 
   return (
-    <div
-      className="workflow-density p-6 max-w-7xl mx-auto space-y-6"
-      style={workflowDensityStyle}
-    >
+    <div className="workflow-density p-6 max-w-7xl mx-auto space-y-6">
       <style jsx global>{`
         .workflow-density {
           --workflow-cell-height: ${DEFAULT_WORKFLOW_ROW_HEIGHT}px;
@@ -2543,6 +2627,12 @@ export default function WorkflowPage() {
         .workflow-compact-cell {
           height: var(--workflow-cell-height);
           font-size: var(--workflow-cell-font-size);
+        }
+
+        .workflow-wrap-cell {
+          white-space: pre-wrap;
+          word-break: break-word;
+          align-items: flex-start;
         }
 
         .workflow-edit-input {
@@ -2652,21 +2742,6 @@ export default function WorkflowPage() {
             </button>
           </div>
         )}
-
-        <div className="flex justify-center">
-          <div
-            role="separator"
-            aria-label="Drag to resize workflow row height"
-            title="Drag to resize workflow row height"
-            onMouseDown={(event) => {
-              event.preventDefault();
-              startRowHeightResize(event.clientY);
-            }}
-            className="group flex h-5 w-24 cursor-row-resize items-center justify-center"
-          >
-            <div className="h-1.5 w-12 rounded-full bg-slate-200 transition group-hover:bg-sky-300" />
-          </div>
-        </div>
       </div>
 
       <div className="space-y-4">
@@ -2703,6 +2778,9 @@ export default function WorkflowPage() {
                 workflowTableMinWidth={workflowTableMinWidth}
                 onStartResize={startColumnResize}
                 onResetColumnWidth={resetColumnWidth}
+                getRowStyle={getRowStyle}
+                onStartResizeRow={startRowHeightResize}
+                onResetRowHeight={resetRowHeight}
                 editingCell={editingCell}
                 editingValue={editingValue}
                 onStartEdit={startEditingCell}
@@ -2745,6 +2823,9 @@ export default function WorkflowPage() {
                         onChangeEditingValue={setEditingValue}
                         onSubmitEdit={submitEditingCell}
                         onCancelEdit={cancelEditingCell}
+                        rowStyle={getRowStyle(row.id)}
+                        onStartResizeRow={startRowHeightResize}
+                        onResetRowHeight={resetRowHeight}
                       />
                     ))}
                   </tbody>
