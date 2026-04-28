@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -189,6 +189,7 @@ type WorkflowHeaderFilterId =
 type WorkflowColumnId = WorkflowHeaderFilterId;
 
 type WorkflowColumnWidths = Record<WorkflowColumnId, number>;
+type WorkflowColumnOrder = WorkflowColumnId[];
 type WorkflowRowHeights = Record<string, number>;
 
 const DEFAULT_FILTERS: WorkflowFilters = {
@@ -256,6 +257,10 @@ const DEFAULT_WORKFLOW_COLUMN_WIDTHS = WORKFLOW_COLUMN_CONFIG.reduce(
   },
   {} as WorkflowColumnWidths
 );
+
+const DEFAULT_WORKFLOW_COLUMN_ORDER = WORKFLOW_COLUMN_CONFIG.map(
+  (column) => column.id
+) as WorkflowColumnOrder;
 
 const WORKFLOW_COLUMN_MIN_WIDTHS = WORKFLOW_COLUMN_CONFIG.reduce(
   (acc, column) => {
@@ -729,17 +734,25 @@ function HeaderFilterButton({
 
 function WorkflowColGroup({
   columnWidths,
+  columnOrder,
 }: {
   columnWidths: WorkflowColumnWidths;
+  columnOrder: WorkflowColumnOrder;
 }) {
   return (
     <colgroup>
-      {WORKFLOW_COLUMN_CONFIG.map((column) => (
+      {columnOrder.map((columnId) => {
+        const column =
+          WORKFLOW_COLUMN_CONFIG.find((entry) => entry.id === columnId) ??
+          WORKFLOW_COLUMN_CONFIG[0];
+
+        return (
         <col
-          key={column.id}
-          style={{ width: `${columnWidths[column.id] ?? column.defaultWidth}px` }}
+          key={columnId}
+          style={{ width: `${columnWidths[columnId] ?? column.defaultWidth}px` }}
         />
-      ))}
+        );
+      })}
     </colgroup>
   );
 }
@@ -749,15 +762,36 @@ function WorkflowHeaderCell({
   children,
   onStartResize,
   onResetColumnWidth,
+  onDragStartColumn,
+  onDragOverColumn,
+  onDropColumn,
+  onDragEndColumn,
+  isDragTarget = false,
 }: {
   columnId: WorkflowColumnId;
   children: ReactNode;
   onStartResize: (columnId: WorkflowColumnId, clientX: number) => void;
   onResetColumnWidth: (columnId: WorkflowColumnId) => void;
+  onDragStartColumn: (columnId: WorkflowColumnId) => void;
+  onDragOverColumn: (columnId: WorkflowColumnId) => void;
+  onDropColumn: (columnId: WorkflowColumnId) => void;
+  onDragEndColumn: () => void;
+  isDragTarget?: boolean;
 }) {
   return (
     <th
-      className="relative px-1 py-1.5 text-left align-top"
+      draggable
+      onDragStart={() => onDragStartColumn(columnId)}
+      onDragEnd={onDragEndColumn}
+      onDragOver={(event) => {
+        event.preventDefault();
+        onDragOverColumn(columnId);
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        onDropColumn(columnId);
+      }}
+      className={`relative px-1 py-1.5 text-left align-top ${isDragTarget ? 'bg-sky-50 ring-1 ring-inset ring-sky-200' : ''}`}
       data-workflow-header-filter-root="true"
     >
       <div className="pr-3">{children}</div>
@@ -814,6 +848,7 @@ function WorkflowRowResizeHandle({
 
 function WorkflowTableHeader({
   filters,
+  columnOrder,
   headerScope,
   activeHeaderFilter,
   activeHeaderScope,
@@ -822,8 +857,14 @@ function WorkflowTableHeader({
   updateFilter,
   onStartResize,
   onResetColumnWidth,
+  onDragStartColumn,
+  onDragOverColumn,
+  onDropColumn,
+  onDragEndColumn,
+  dragOverColumnId,
 }: {
   filters: WorkflowFilters;
+  columnOrder: WorkflowColumnOrder;
   headerScope: string;
   activeHeaderFilter: WorkflowHeaderFilterId | null;
   activeHeaderScope: string | null;
@@ -832,6 +873,11 @@ function WorkflowTableHeader({
   updateFilter: <K extends keyof WorkflowFilters>(key: K, value: WorkflowFilters[K]) => void;
   onStartResize: (columnId: WorkflowColumnId, clientX: number) => void;
   onResetColumnWidth: (columnId: WorkflowColumnId) => void;
+  onDragStartColumn: (columnId: WorkflowColumnId) => void;
+  onDragOverColumn: (columnId: WorkflowColumnId) => void;
+  onDropColumn: (columnId: WorkflowColumnId) => void;
+  onDragEndColumn: () => void;
+  dragOverColumnId: WorkflowColumnId | null;
 }) {
   const toggleFilter = (filterId: WorkflowHeaderFilterId) => {
     const isSameFilter =
@@ -855,6 +901,11 @@ function WorkflowTableHeader({
       columnId={filterId}
       onStartResize={onStartResize}
       onResetColumnWidth={onResetColumnWidth}
+      onDragStartColumn={onDragStartColumn}
+      onDragOverColumn={onDragOverColumn}
+      onDropColumn={onDropColumn}
+      onDragEndColumn={onDragEndColumn}
+      isDragTarget={dragOverColumnId === filterId}
     >
       <div className="relative">
         <HeaderFilterButton
@@ -880,13 +931,17 @@ function WorkflowTableHeader({
     </WorkflowHeaderCell>
   );
 
-  return (
-    <thead className="border-b bg-slate-50">
-      <tr>
-        <WorkflowHeaderCell
+  const headerCells: Record<WorkflowColumnId, ReactNode> = {
+    status: (
+      <WorkflowHeaderCell
           columnId="status"
           onStartResize={onStartResize}
           onResetColumnWidth={onResetColumnWidth}
+          onDragStartColumn={onDragStartColumn}
+          onDragOverColumn={onDragOverColumn}
+          onDropColumn={onDropColumn}
+          onDragEndColumn={onDragEndColumn}
+          isDragTarget={dragOverColumnId === 'status'}
         >
           <div className="relative">
             <HeaderFilterButton
@@ -911,11 +966,18 @@ function WorkflowTableHeader({
               </div>
             ) : null}
           </div>
-        </WorkflowHeaderCell>
-        <WorkflowHeaderCell
+      </WorkflowHeaderCell>
+    ),
+    prep: (
+      <WorkflowHeaderCell
           columnId="prep"
           onStartResize={onStartResize}
           onResetColumnWidth={onResetColumnWidth}
+          onDragStartColumn={onDragStartColumn}
+          onDragOverColumn={onDragOverColumn}
+          onDropColumn={onDropColumn}
+          onDragEndColumn={onDragEndColumn}
+          isDragTarget={dragOverColumnId === 'prep'}
         >
           <div className="relative">
             <HeaderFilterButton
@@ -940,11 +1002,18 @@ function WorkflowTableHeader({
               </div>
             ) : null}
           </div>
-        </WorkflowHeaderCell>
-        <WorkflowHeaderCell
+      </WorkflowHeaderCell>
+    ),
+    delivery: (
+      <WorkflowHeaderCell
           columnId="delivery"
           onStartResize={onStartResize}
           onResetColumnWidth={onResetColumnWidth}
+          onDragStartColumn={onDragStartColumn}
+          onDragOverColumn={onDragOverColumn}
+          onDropColumn={onDropColumn}
+          onDragEndColumn={onDragEndColumn}
+          isDragTarget={dragOverColumnId === 'delivery'}
         >
           <div className="relative">
             <HeaderFilterButton
@@ -969,25 +1038,30 @@ function WorkflowTableHeader({
               </div>
             ) : null}
           </div>
-        </WorkflowHeaderCell>
-        {renderTextFilter('record_number', 'No. / Trip', 'recordNumber', 'w-44', 'Order, client or trip no.')}
-        {renderTextFilter('kind', 'Kind', 'kind', 'w-32', 'Kind')}
-        {renderTextFilter('company', 'Company', 'company', 'w-40', 'Company')}
-        {renderTextFilter('contact', 'Contact', 'contact', 'w-40', 'Contact')}
-        {renderTextFilter('sender', 'Sender', 'sender', 'w-36', 'Sender')}
-        {renderTextFilter('loading', 'Loading', 'loading', 'w-44', 'Loading')}
-        {renderTextFilter('loading_customs', 'Loading customs', 'loadingCustoms', 'w-44', 'Loading customs')}
-        {renderTextFilter('receiver', 'Receiver', 'receiver', 'w-36', 'Receiver')}
-        {renderTextFilter('unloading', 'Unloading', 'unloading', 'w-44', 'Unloading')}
-        {renderTextFilter('unloading_customs', 'Unloading customs', 'unloadingCustoms', 'w-44', 'Unloading customs')}
-        {renderTextFilter('cargo', 'Cargo', 'cargo', 'w-44', 'Cargo')}
-        {renderTextFilter('kg', 'KG', 'kg', 'w-32', 'KG')}
-        {renderTextFilter('ldm', 'LDM', 'ldm', 'w-32', 'LDM')}
-        {renderTextFilter('revenue', 'Revenue', 'revenue', 'w-36', 'Revenue')}
-        {renderTextFilter('cost', 'Cost', 'cost', 'w-36', 'Cost')}
-        {renderTextFilter('profit', 'Profit', 'profit', 'w-36', 'Profit')}
-        {renderTextFilter('trip_vehicle', 'Trip / Vehicle', 'tripVehicle', 'w-44', 'Trip / Vehicle')}
-      </tr>
+      </WorkflowHeaderCell>
+    ),
+    record_number: renderTextFilter('record_number', 'No. / Trip', 'recordNumber', 'w-44', 'Order, client or trip no.'),
+    kind: renderTextFilter('kind', 'Kind', 'kind', 'w-32', 'Kind'),
+    company: renderTextFilter('company', 'Company', 'company', 'w-40', 'Company'),
+    contact: renderTextFilter('contact', 'Contact', 'contact', 'w-40', 'Contact'),
+    sender: renderTextFilter('sender', 'Sender', 'sender', 'w-36', 'Sender'),
+    loading: renderTextFilter('loading', 'Loading', 'loading', 'w-44', 'Loading'),
+    loading_customs: renderTextFilter('loading_customs', 'Loading customs', 'loadingCustoms', 'w-44', 'Loading customs'),
+    receiver: renderTextFilter('receiver', 'Receiver', 'receiver', 'w-36', 'Receiver'),
+    unloading: renderTextFilter('unloading', 'Unloading', 'unloading', 'w-44', 'Unloading'),
+    unloading_customs: renderTextFilter('unloading_customs', 'Unloading customs', 'unloadingCustoms', 'w-44', 'Unloading customs'),
+    cargo: renderTextFilter('cargo', 'Cargo', 'cargo', 'w-44', 'Cargo'),
+    kg: renderTextFilter('kg', 'KG', 'kg', 'w-32', 'KG'),
+    ldm: renderTextFilter('ldm', 'LDM', 'ldm', 'w-32', 'LDM'),
+    revenue: renderTextFilter('revenue', 'Revenue', 'revenue', 'w-36', 'Revenue'),
+    cost: renderTextFilter('cost', 'Cost', 'cost', 'w-36', 'Cost'),
+    profit: renderTextFilter('profit', 'Profit', 'profit', 'w-36', 'Profit'),
+    trip_vehicle: renderTextFilter('trip_vehicle', 'Trip / Vehicle', 'tripVehicle', 'w-44', 'Trip / Vehicle'),
+  };
+
+  return (
+    <thead className="border-b bg-slate-50">
+      <tr>{columnOrder.map((columnId) => <Fragment key={columnId}>{headerCells[columnId]}</Fragment>)}</tr>
     </thead>
   );
 }
@@ -1085,6 +1159,7 @@ function WorkflowDisplayCell({
 
 function WorkflowStandaloneRowView({
   row,
+  columnOrder,
   onOpenOrder,
   onOpenTrip,
   onAcknowledgeField,
@@ -1100,6 +1175,7 @@ function WorkflowStandaloneRowView({
   onResetRowHeight,
 }: {
   row: WorkflowStandaloneRow;
+  columnOrder: WorkflowColumnOrder;
   onOpenOrder: (orderId: string) => void;
   onOpenTrip: (tripId: string) => void;
   onAcknowledgeField: (
@@ -1164,8 +1240,8 @@ function WorkflowStandaloneRowView({
     row.row_type === 'trip_row' ? tripFieldCell('status') : orderFieldCell('status');
   const canEditStatus = allowAcknowledge && !!statusCell;
 
-  return (
-    <tr className="border-b hover:bg-slate-50" style={rowStyle}>
+  const cells: Record<WorkflowColumnId, ReactNode> = {
+    status: (
       <td className="group/row-resize relative px-2 py-1.5 whitespace-nowrap">
         <WorkflowDisplayCell
           value={formatStatusLabel(row.status)}
@@ -1189,12 +1265,18 @@ function WorkflowStandaloneRowView({
           onResetHeight={() => onResetRowHeight(row.id)}
         />
       </td>
+    ),
+    prep: (
       <td className="px-2 py-1.5 whitespace-nowrap">
         <CompactCell value={row.prep_date || '-'} />
       </td>
+    ),
+    delivery: (
       <td className="px-2 py-1.5 whitespace-nowrap">
         <CompactCell value={row.delivery_date || '-'} />
       </td>
+    ),
+    record_number: (
       <td className="px-2 py-1.5 whitespace-nowrap font-medium text-slate-900">
         <button
           type="button"
@@ -1219,15 +1301,21 @@ function WorkflowStandaloneRowView({
           <CompactCell value={buildRecordNumberDisplay(row)} scrollable />
         </button>
       </td>
+    ),
+    kind: (
       <td className="px-2 py-1.5 whitespace-nowrap">
         <CompactCell value={row.kind} />
       </td>
+    ),
+    company: (
       <td className="px-2 py-1.5">
         <WorkflowDisplayCell
           value={removeCompanyCode(row.company_display)}
           scrollable
         />
       </td>
+    ),
+    contact: (
       <td className="px-2 py-1.5">
         {(() => {
           const cell = orderFieldCell('contact') ?? (canEditTripField ? tripFieldCell('contact') : null);
@@ -1248,6 +1336,8 @@ function WorkflowStandaloneRowView({
           );
         })()}
       </td>
+    ),
+    sender: (
       <td className="px-2 py-1.5">
         <WorkflowDisplayCell
           value={row.shipper_name}
@@ -1267,6 +1357,8 @@ function WorkflowStandaloneRowView({
           onCancelEdit={onCancelEdit}
         />
       </td>
+    ),
+    loading: (
       <td className="px-2 py-1.5">
         <WorkflowDisplayCell
           value={buildLocationCell(row.loading_display, row.loading_extra)}
@@ -1290,6 +1382,8 @@ function WorkflowStandaloneRowView({
           onCancelEdit={onCancelEdit}
         />
       </td>
+    ),
+    loading_customs: (
       <td className="px-2 py-1.5">
         <WorkflowDisplayCell
           value={row.loading_customs_display}
@@ -1313,6 +1407,8 @@ function WorkflowStandaloneRowView({
           onCancelEdit={onCancelEdit}
         />
       </td>
+    ),
+    receiver: (
       <td className="px-2 py-1.5">
         <WorkflowDisplayCell
           value={row.consignee_name}
@@ -1332,6 +1428,8 @@ function WorkflowStandaloneRowView({
           onCancelEdit={onCancelEdit}
         />
       </td>
+    ),
+    unloading: (
       <td className="px-2 py-1.5">
         <WorkflowDisplayCell
           value={buildLocationCell(row.unloading_display, row.unloading_extra)}
@@ -1355,6 +1453,8 @@ function WorkflowStandaloneRowView({
           onCancelEdit={onCancelEdit}
         />
       </td>
+    ),
+    unloading_customs: (
       <td className="px-2 py-1.5">
         <WorkflowDisplayCell
           value={row.unloading_customs_display}
@@ -1378,6 +1478,8 @@ function WorkflowStandaloneRowView({
           onCancelEdit={onCancelEdit}
         />
       </td>
+    ),
+    cargo: (
       <td className="px-2 py-1.5">
         <WorkflowDisplayCell
           value={row.cargo_display}
@@ -1397,6 +1499,8 @@ function WorkflowStandaloneRowView({
           onCancelEdit={onCancelEdit}
         />
       </td>
+    ),
+    kg: (
       <td className="px-2 py-1.5 whitespace-nowrap">
         <WorkflowDisplayCell
           value={row.kg_display || formatNumberCell(row.cargo_kg)}
@@ -1419,6 +1523,8 @@ function WorkflowStandaloneRowView({
           onCancelEdit={onCancelEdit}
         />
       </td>
+    ),
+    ldm: (
       <td className="px-2 py-1.5 whitespace-nowrap">
         <WorkflowDisplayCell
           value={row.ldm_display || formatNumberCell(row.cargo_ldm)}
@@ -1441,6 +1547,8 @@ function WorkflowStandaloneRowView({
           onCancelEdit={onCancelEdit}
         />
       </td>
+    ),
+    revenue: (
       <td className="px-2 py-1.5 whitespace-nowrap">
         <WorkflowDisplayCell
           value={formatMoneyCell(row.revenue_display)}
@@ -1463,6 +1571,8 @@ function WorkflowStandaloneRowView({
           onCancelEdit={onCancelEdit}
         />
       </td>
+    ),
+    cost: (
       <td className="px-2 py-1.5 whitespace-nowrap">
         <WorkflowDisplayCell
           value={formatMoneyCell(row.cost_display)}
@@ -1485,6 +1595,8 @@ function WorkflowStandaloneRowView({
           onCancelEdit={onCancelEdit}
         />
       </td>
+    ),
+    profit: (
       <td className="px-2 py-1.5 whitespace-nowrap">
         <WorkflowDisplayCell
           value={formatMoneyCell(row.profit_display)}
@@ -1516,6 +1628,8 @@ function WorkflowStandaloneRowView({
           onCancelEdit={onCancelEdit}
         />
       </td>
+    ),
+    trip_vehicle: (
       <td className="px-2 py-1.5">
         <WorkflowDisplayCell
           value={
@@ -1545,12 +1659,21 @@ function WorkflowStandaloneRowView({
           onCancelEdit={onCancelEdit}
         />
       </td>
+    ),
+  };
+
+  return (
+    <tr className="border-b hover:bg-slate-50" style={rowStyle}>
+      {columnOrder.map((columnId) => (
+        <Fragment key={`${row.id}-${columnId}`}>{cells[columnId]}</Fragment>
+      ))}
     </tr>
   );
 }
 
 function GroupageBlock({
   group,
+  columnOrder,
   headerScope,
   onOpenOrder,
   onOpenTrip,
@@ -1566,6 +1689,11 @@ function GroupageBlock({
   workflowTableMinWidth,
   onStartResize,
   onResetColumnWidth,
+  onDragStartColumn,
+  onDragOverColumn,
+  onDropColumn,
+  onDragEndColumn,
+  dragOverColumnId,
   getRowStyle,
   onStartResizeRow,
   onResetRowHeight,
@@ -1577,6 +1705,7 @@ function GroupageBlock({
   onCancelEdit,
 }: {
   group: WorkflowGroup;
+  columnOrder: WorkflowColumnOrder;
   headerScope: string;
   onOpenOrder: (orderId: string) => void;
   onOpenTrip: (tripId: string) => void;
@@ -1596,6 +1725,11 @@ function GroupageBlock({
   workflowTableMinWidth: number;
   onStartResize: (columnId: WorkflowColumnId, clientX: number) => void;
   onResetColumnWidth: (columnId: WorkflowColumnId) => void;
+  onDragStartColumn: (columnId: WorkflowColumnId) => void;
+  onDragOverColumn: (columnId: WorkflowColumnId) => void;
+  onDropColumn: (columnId: WorkflowColumnId) => void;
+  onDragEndColumn: () => void;
+  dragOverColumnId: WorkflowColumnId | null;
   getRowStyle: (rowId: string) => CSSProperties | undefined;
   onStartResizeRow: (rowId: string, clientY: number) => void;
   onResetRowHeight: (rowId: string) => void;
@@ -1642,15 +1776,226 @@ function GroupageBlock({
     cell.record_id === editingCell.record_id &&
     cell.field_key === editingCell.field_key;
 
+  const headerCells: Record<WorkflowColumnId, ReactNode> = {
+    status: (
+      <td className="group/row-resize relative px-2 py-1 whitespace-nowrap">
+        <WorkflowDisplayCell
+          value={formatStatusLabel(group.trip_status)}
+          state={group.field_states.status}
+          onAcknowledge={acknowledge(group.field_states.status)}
+          editable={canEditGroupStatus}
+          onStartEdit={
+            canEditGroupStatus
+              ? () =>
+                  onStartEdit(
+                    groupHeaderCell('status'),
+                    group.trip_status || 'active'
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(groupHeaderCell('status'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
+          selectOptions={WORKFLOW_STATUS_OPTIONS}
+        />
+        <WorkflowRowResizeHandle
+          onStartResize={(clientY) => onStartResizeRow(group.id, clientY)}
+          onResetHeight={() => onResetRowHeight(group.id)}
+        />
+      </td>
+    ),
+    prep: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    delivery: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    record_number: (
+      <td className="px-2 py-1 whitespace-nowrap font-semibold text-slate-900">
+        <button
+          type="button"
+          onClick={() => onOpenTrip(group.trip_id)}
+          className="block w-full text-left"
+          title={group.trip_number}
+        >
+          <CompactCell value={group.trip_number} scrollable />
+        </button>
+      </td>
+    ),
+    kind: (
+      <td className="px-2 py-1 whitespace-nowrap font-medium text-amber-900">
+        <CompactCell value="Groupage start" />
+      </td>
+    ),
+    company: (
+      <td className="px-2 py-1">
+        <CompactCell value={removeCompanyCode(group.carrier_display)} scrollable />
+      </td>
+    ),
+    contact: (
+      <td className="px-2 py-1">
+        <WorkflowDisplayCell
+          value={group.responsible_display}
+          scrollable
+          state={group.field_states.contact}
+          onAcknowledge={acknowledge(group.field_states.contact)}
+          editable={canEditTripField}
+          onStartEdit={
+            canEditTripField
+              ? () => onStartEdit(groupHeaderCell('contact'), group.responsible_display)
+              : null
+          }
+          isEditing={matchesEditingCell(groupHeaderCell('contact'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
+        />
+      </td>
+    ),
+    sender: <td className="px-2 py-1"><CompactCell value="-" /></td>,
+    loading: <td className="px-2 py-1"><CompactCell value="-" /></td>,
+    loading_customs: <td className="px-2 py-1"><CompactCell value="-" /></td>,
+    receiver: <td className="px-2 py-1"><CompactCell value="-" /></td>,
+    unloading: <td className="px-2 py-1"><CompactCell value="-" /></td>,
+    unloading_customs: <td className="px-2 py-1"><CompactCell value="-" /></td>,
+    cargo: (
+      <td className="px-2 py-1 whitespace-nowrap">
+        <CompactCell value={`${group.rows.length} orders`} />
+      </td>
+    ),
+    kg: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    ldm: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    revenue: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    cost: (
+      <td className="px-2 py-1 whitespace-nowrap">
+        <WorkflowDisplayCell
+          value={formatMoneyCell(group.cost_display)}
+          state={group.field_states.cost}
+          onAcknowledge={acknowledge(group.field_states.cost)}
+          editable={canEditTripField}
+          onStartEdit={
+            canEditTripField
+              ? () => onStartEdit(groupHeaderCell('cost'), formatMoneyCell(group.cost_display))
+              : null
+          }
+          isEditing={matchesEditingCell(groupHeaderCell('cost'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
+        />
+      </td>
+    ),
+    profit: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    trip_vehicle: (
+      <td className="px-2 py-1">
+        <WorkflowDisplayCell
+          value={group.vehicle_display}
+          scrollable
+          state={group.field_states.trip_vehicle}
+          onAcknowledge={acknowledge(group.field_states.trip_vehicle)}
+          editable={canEditTripField}
+          onStartEdit={
+            canEditTripField
+              ? () => onStartEdit(groupHeaderCell('trip_vehicle'), group.vehicle_display)
+              : null
+          }
+          isEditing={matchesEditingCell(groupHeaderCell('trip_vehicle'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
+        />
+      </td>
+    ),
+  };
+
+  const footerCells: Record<WorkflowColumnId, ReactNode> = {
+    status: (
+      <td className="group/row-resize relative px-2 py-1 whitespace-nowrap">
+        <CompactCell value="-" />
+        <WorkflowRowResizeHandle
+          onStartResize={(clientY) => onStartResizeRow(group.footer.id, clientY)}
+          onResetHeight={() => onResetRowHeight(group.footer.id)}
+        />
+      </td>
+    ),
+    prep: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    delivery: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    record_number: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="Summary" /></td>,
+    kind: <td className="px-2 py-1 whitespace-nowrap text-amber-900"><CompactCell value="Groupage end" /></td>,
+    company: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    contact: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    sender: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    loading: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    loading_customs: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    receiver: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    unloading: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    unloading_customs: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    cargo: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    kg: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value={formatNumberCell(group.footer.kg_value)} /></td>,
+    ldm: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value={formatNumberCell(group.footer.ldm_value)} /></td>,
+    revenue: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value={formatMoneyCell(group.footer.revenue_display)} /></td>,
+    cost: (
+      <td className="px-2 py-1 whitespace-nowrap">
+        <WorkflowDisplayCell
+          value={formatMoneyCell(group.footer.cost_display)}
+          state={group.footer.field_states.cost}
+          onAcknowledge={acknowledge(group.footer.field_states.cost)}
+          editable={canEditTripField}
+          onStartEdit={
+            canEditTripField
+              ? () =>
+                  onStartEdit(
+                    groupFooterCell('cost'),
+                    formatMoneyCell(group.footer.cost_display)
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(groupFooterCell('cost'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
+        />
+      </td>
+    ),
+    profit: (
+      <td className="px-2 py-1 whitespace-nowrap">
+        <WorkflowDisplayCell
+          value={formatMoneyCell(group.footer.profit_display)}
+          state={group.footer.field_states.profit}
+          onAcknowledge={acknowledge(group.footer.field_states.profit)}
+          editable={canEditTripField}
+          onStartEdit={
+            canEditTripField
+              ? () =>
+                  onStartEdit(
+                    groupFooterCell('profit'),
+                    formatMoneyCell(group.footer.profit_display)
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(groupFooterCell('profit'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
+        />
+      </td>
+    ),
+    trip_vehicle: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+  };
+
   return (
     <div className="overflow-x-auto rounded-xl border">
       <table
         className="w-full table-fixed text-[11px] leading-tight"
         style={{ minWidth: `${workflowTableMinWidth}px` }}
       >
-        <WorkflowColGroup columnWidths={columnWidths} />
+        <WorkflowColGroup columnWidths={columnWidths} columnOrder={columnOrder} />
         <WorkflowTableHeader
           filters={filters}
+          columnOrder={columnOrder}
           headerScope={headerScope}
           activeHeaderFilter={activeHeaderFilter}
           activeHeaderScope={activeHeaderScope}
@@ -1659,132 +2004,27 @@ function GroupageBlock({
           updateFilter={updateFilter}
           onStartResize={onStartResize}
           onResetColumnWidth={onResetColumnWidth}
+          onDragStartColumn={onDragStartColumn}
+          onDragOverColumn={onDragOverColumn}
+          onDropColumn={onDropColumn}
+          onDragEndColumn={onDragEndColumn}
+          dragOverColumnId={dragOverColumnId}
         />
         <tbody>
           <tr
             className="border-b-2 border-amber-300 bg-amber-100/70"
             style={getRowStyle(group.id)}
           >
-            <td className="group/row-resize relative px-2 py-1 whitespace-nowrap">
-              <WorkflowDisplayCell
-                value={formatStatusLabel(group.trip_status)}
-                state={group.field_states.status}
-                onAcknowledge={acknowledge(group.field_states.status)}
-                editable={canEditGroupStatus}
-                onStartEdit={
-                  canEditGroupStatus
-                    ? () =>
-                        onStartEdit(
-                          groupHeaderCell('status'),
-                          group.trip_status || 'active'
-                        )
-                    : null
-                }
-                isEditing={matchesEditingCell(groupHeaderCell('status'))}
-                editingValue={editingValue}
-                onChangeEditingValue={onChangeEditingValue}
-                onSubmitEdit={onSubmitEdit}
-                onCancelEdit={onCancelEdit}
-                selectOptions={WORKFLOW_STATUS_OPTIONS}
-              />
-              <WorkflowRowResizeHandle
-                onStartResize={(clientY) => onStartResizeRow(group.id, clientY)}
-                onResetHeight={() => onResetRowHeight(group.id)}
-              />
-            </td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
-            <td className="px-2 py-1 whitespace-nowrap font-semibold text-slate-900">
-              <button
-                type="button"
-                onClick={() => onOpenTrip(group.trip_id)}
-                className="block w-full text-left"
-                title={group.trip_number}
-              >
-                <CompactCell value={group.trip_number} scrollable />
-              </button>
-            </td>
-            <td className="px-2 py-1 whitespace-nowrap font-medium text-amber-900">
-              <CompactCell value="Groupage start" />
-            </td>
-            <td className="px-2 py-1">
-              <CompactCell value={removeCompanyCode(group.carrier_display)} scrollable />
-            </td>
-            <td className="px-2 py-1">
-              <WorkflowDisplayCell
-                value={group.responsible_display}
-                scrollable
-                state={group.field_states.contact}
-                onAcknowledge={acknowledge(group.field_states.contact)}
-                editable={canEditTripField}
-                onStartEdit={
-                  canEditTripField
-                    ? () => onStartEdit(groupHeaderCell('contact'), group.responsible_display)
-                    : null
-                }
-                isEditing={matchesEditingCell(groupHeaderCell('contact'))}
-                editingValue={editingValue}
-                onChangeEditingValue={onChangeEditingValue}
-                onSubmitEdit={onSubmitEdit}
-                onCancelEdit={onCancelEdit}
-              />
-            </td>
-              <td className="px-2 py-1"><CompactCell value="-" /></td>
-              <td className="px-2 py-1"><CompactCell value="-" /></td>
-              <td className="px-2 py-1"><CompactCell value="-" /></td>
-              <td className="px-2 py-1"><CompactCell value="-" /></td>
-              <td className="px-2 py-1"><CompactCell value="-" /></td>
-              <td className="px-2 py-1"><CompactCell value="-" /></td>
-              <td className="px-2 py-1 whitespace-nowrap">
-                <CompactCell value={`${group.rows.length} orders`} />
-              </td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
-            <td className="px-2 py-1 whitespace-nowrap">
-              <WorkflowDisplayCell
-                value={formatMoneyCell(group.cost_display)}
-                state={group.field_states.cost}
-                onAcknowledge={acknowledge(group.field_states.cost)}
-                editable={canEditTripField}
-                onStartEdit={
-                  canEditTripField
-                    ? () => onStartEdit(groupHeaderCell('cost'), formatMoneyCell(group.cost_display))
-                    : null
-                }
-                isEditing={matchesEditingCell(groupHeaderCell('cost'))}
-                editingValue={editingValue}
-                onChangeEditingValue={onChangeEditingValue}
-                onSubmitEdit={onSubmitEdit}
-                onCancelEdit={onCancelEdit}
-              />
-            </td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
-            <td className="px-2 py-1">
-              <WorkflowDisplayCell
-                value={group.vehicle_display}
-                scrollable
-                state={group.field_states.trip_vehicle}
-                onAcknowledge={acknowledge(group.field_states.trip_vehicle)}
-                editable={canEditTripField}
-                onStartEdit={
-                  canEditTripField
-                    ? () => onStartEdit(groupHeaderCell('trip_vehicle'), group.vehicle_display)
-                    : null
-                }
-                isEditing={matchesEditingCell(groupHeaderCell('trip_vehicle'))}
-                editingValue={editingValue}
-                onChangeEditingValue={onChangeEditingValue}
-                onSubmitEdit={onSubmitEdit}
-                onCancelEdit={onCancelEdit}
-              />
-            </td>
+            {columnOrder.map((columnId) => (
+              <Fragment key={`${group.id}-${columnId}`}>{headerCells[columnId]}</Fragment>
+            ))}
           </tr>
 
           {group.rows.map((row) => (
             <WorkflowStandaloneRowView
               key={row.id}
               row={row}
+              columnOrder={columnOrder}
               onOpenOrder={onOpenOrder}
               onOpenTrip={onOpenTrip}
               onAcknowledgeField={onAcknowledgeField}
@@ -1805,80 +2045,9 @@ function GroupageBlock({
             className="border-t-2 border-amber-300 bg-amber-100/70 font-medium"
             style={getRowStyle(group.footer.id)}
           >
-            <td className="group/row-resize relative px-2 py-1 whitespace-nowrap">
-              <CompactCell value="-" />
-              <WorkflowRowResizeHandle
-                onStartResize={(clientY) => onStartResizeRow(group.footer.id, clientY)}
-                onResetHeight={() => onResetRowHeight(group.footer.id)}
-              />
-            </td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="Summary" /></td>
-            <td className="px-2 py-1 whitespace-nowrap text-amber-900"><CompactCell value="Groupage end" /></td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
-            <td className="px-2 py-1 whitespace-nowrap">
-              <CompactCell value={formatNumberCell(group.footer.kg_value)} />
-            </td>
-            <td className="px-2 py-1 whitespace-nowrap">
-              <CompactCell value={formatNumberCell(group.footer.ldm_value)} />
-            </td>
-            <td className="px-2 py-1 whitespace-nowrap">
-              <CompactCell value={formatMoneyCell(group.footer.revenue_display)} />
-            </td>
-            <td className="px-2 py-1 whitespace-nowrap">
-              <WorkflowDisplayCell
-                value={formatMoneyCell(group.footer.cost_display)}
-                state={group.footer.field_states.cost}
-                onAcknowledge={acknowledge(group.footer.field_states.cost)}
-                editable={canEditTripField}
-                onStartEdit={
-                  canEditTripField
-                    ? () =>
-                        onStartEdit(
-                          groupFooterCell('cost'),
-                          formatMoneyCell(group.footer.cost_display)
-                        )
-                    : null
-                }
-                isEditing={matchesEditingCell(groupFooterCell('cost'))}
-                editingValue={editingValue}
-                onChangeEditingValue={onChangeEditingValue}
-                onSubmitEdit={onSubmitEdit}
-                onCancelEdit={onCancelEdit}
-              />
-            </td>
-            <td className="px-2 py-1 whitespace-nowrap">
-              <WorkflowDisplayCell
-                value={formatMoneyCell(group.footer.profit_display)}
-                state={group.footer.field_states.profit}
-                onAcknowledge={acknowledge(group.footer.field_states.profit)}
-                editable={canEditTripField}
-                onStartEdit={
-                  canEditTripField
-                    ? () =>
-                        onStartEdit(
-                          groupFooterCell('profit'),
-                          formatMoneyCell(group.footer.profit_display)
-                        )
-                    : null
-                }
-                isEditing={matchesEditingCell(groupFooterCell('profit'))}
-                editingValue={editingValue}
-                onChangeEditingValue={onChangeEditingValue}
-                onSubmitEdit={onSubmitEdit}
-                onCancelEdit={onCancelEdit}
-              />
-            </td>
-            <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>
+            {columnOrder.map((columnId) => (
+              <Fragment key={`${group.footer.id}-${columnId}`}>{footerCells[columnId]}</Fragment>
+            ))}
           </tr>
         </tbody>
       </table>
@@ -1901,6 +2070,10 @@ export default function WorkflowPage() {
     DEFAULT_WORKFLOW_COLUMN_WIDTHS
   );
   const [columnWidthsHydrated, setColumnWidthsHydrated] = useState(false);
+  const [columnOrder, setColumnOrder] = useState<WorkflowColumnOrder>(
+    DEFAULT_WORKFLOW_COLUMN_ORDER
+  );
+  const [columnOrderHydrated, setColumnOrderHydrated] = useState(false);
   const [rowHeights, setRowHeights] = useState<WorkflowRowHeights>({});
   const [rowHeightHydrated, setRowHeightHydrated] = useState(false);
   const [activeHeaderFilter, setActiveHeaderFilter] =
@@ -1911,6 +2084,8 @@ export default function WorkflowPage() {
     startX: number;
     startWidth: number;
   } | null>(null);
+  const [draggingColumnId, setDraggingColumnId] = useState<WorkflowColumnId | null>(null);
+  const [dragOverColumnId, setDragOverColumnId] = useState<WorkflowColumnId | null>(null);
   const [resizingRowHeight, setResizingRowHeight] = useState<{
     rowId: string;
     startY: number;
@@ -2016,6 +2191,53 @@ export default function WorkflowPage() {
       JSON.stringify(columnWidths)
     );
   }, [columnWidths, columnWidthsHydrated, viewerUserId]);
+
+  useEffect(() => {
+    if (!viewerUserId) {
+      return;
+    }
+
+    try {
+      const saved = window.localStorage.getItem(
+        `synchub.workflow.column-order.${viewerUserId}`
+      );
+
+      if (!saved) {
+        setColumnOrder(DEFAULT_WORKFLOW_COLUMN_ORDER);
+      } else {
+        const parsed = JSON.parse(saved) as unknown;
+        if (Array.isArray(parsed)) {
+          const normalized = parsed.filter((value): value is WorkflowColumnId =>
+            DEFAULT_WORKFLOW_COLUMN_ORDER.includes(value as WorkflowColumnId)
+          );
+          const missing = DEFAULT_WORKFLOW_COLUMN_ORDER.filter(
+            (columnId) => !normalized.includes(columnId)
+          );
+          setColumnOrder(
+            normalized.length > 0 ? [...normalized, ...missing] : DEFAULT_WORKFLOW_COLUMN_ORDER
+          );
+        } else {
+          setColumnOrder(DEFAULT_WORKFLOW_COLUMN_ORDER);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to hydrate workflow column order:', error);
+      setColumnOrder(DEFAULT_WORKFLOW_COLUMN_ORDER);
+    } finally {
+      setColumnOrderHydrated(true);
+    }
+  }, [viewerUserId]);
+
+  useEffect(() => {
+    if (!viewerUserId || !columnOrderHydrated) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      `synchub.workflow.column-order.${viewerUserId}`,
+      JSON.stringify(columnOrder)
+    );
+  }, [columnOrder, columnOrderHydrated, viewerUserId]);
 
   useEffect(() => {
     if (!viewerUserId) {
@@ -2270,6 +2492,49 @@ export default function WorkflowPage() {
       ...prev,
       [columnId]: DEFAULT_WORKFLOW_COLUMN_WIDTHS[columnId],
     }));
+  };
+
+  const startColumnDrag = (columnId: WorkflowColumnId) => {
+    setActiveHeaderFilter(null);
+    setActiveHeaderScope(null);
+    setDraggingColumnId(columnId);
+    setDragOverColumnId(columnId);
+  };
+
+  const dragOverColumn = (columnId: WorkflowColumnId) => {
+    if (!draggingColumnId || draggingColumnId === columnId) {
+      return;
+    }
+
+    setDragOverColumnId(columnId);
+  };
+
+  const dropColumn = (targetColumnId: WorkflowColumnId) => {
+    if (!draggingColumnId) {
+      return;
+    }
+
+    setColumnOrder((prev) => {
+      const next = [...prev];
+      const fromIndex = next.indexOf(draggingColumnId);
+      const toIndex = next.indexOf(targetColumnId);
+
+      if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) {
+        return prev;
+      }
+
+      next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, draggingColumnId);
+      return next;
+    });
+
+    setDraggingColumnId(null);
+    setDragOverColumnId(null);
+  };
+
+  const endColumnDrag = () => {
+    setDraggingColumnId(null);
+    setDragOverColumnId(null);
   };
 
   const getRowStyle = (rowId: string): CSSProperties | undefined => {
@@ -2763,6 +3028,7 @@ export default function WorkflowPage() {
               <GroupageBlock
                 key={group.id}
                 group={group}
+                columnOrder={columnOrder}
                 headerScope={`group-${group.id}`}
                 onOpenOrder={(orderId) => router.push(`/app/orders/${orderId}`)}
                 onOpenTrip={(tripId) => router.push(`/app/trips/${tripId}`)}
@@ -2778,6 +3044,11 @@ export default function WorkflowPage() {
                 workflowTableMinWidth={workflowTableMinWidth}
                 onStartResize={startColumnResize}
                 onResetColumnWidth={resetColumnWidth}
+                onDragStartColumn={startColumnDrag}
+                onDragOverColumn={dragOverColumn}
+                onDropColumn={dropColumn}
+                onDragEndColumn={endColumnDrag}
+                dragOverColumnId={dragOverColumnId}
                 getRowStyle={getRowStyle}
                 onStartResizeRow={startRowHeightResize}
                 onResetRowHeight={resetRowHeight}
@@ -2796,9 +3067,10 @@ export default function WorkflowPage() {
                   className="w-full table-fixed text-[11px] leading-tight"
                   style={{ minWidth: `${workflowTableMinWidth}px` }}
                 >
-                  <WorkflowColGroup columnWidths={columnWidths} />
+                  <WorkflowColGroup columnWidths={columnWidths} columnOrder={columnOrder} />
                   <WorkflowTableHeader
                     filters={filters}
+                    columnOrder={columnOrder}
                     headerScope="standalone"
                     activeHeaderFilter={activeHeaderFilter}
                     activeHeaderScope={activeHeaderScope}
@@ -2807,12 +3079,18 @@ export default function WorkflowPage() {
                     updateFilter={updateFilter}
                     onStartResize={startColumnResize}
                     onResetColumnWidth={resetColumnWidth}
+                    onDragStartColumn={startColumnDrag}
+                    onDragOverColumn={dragOverColumn}
+                    onDropColumn={dropColumn}
+                    onDragEndColumn={endColumnDrag}
+                    dragOverColumnId={dragOverColumnId}
                   />
                   <tbody>
                     {filteredData.rows.map((row) => (
                       <WorkflowStandaloneRowView
                         key={row.id}
                         row={row}
+                        columnOrder={columnOrder}
                         onOpenOrder={(orderId) => router.push(`/app/orders/${orderId}`)}
                         onOpenTrip={(tripId) => router.push(`/app/trips/${tripId}`)}
                         onAcknowledgeField={acknowledgeWorkflowField}
