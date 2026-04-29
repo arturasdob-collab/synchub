@@ -65,6 +65,7 @@ type WorkflowStandaloneRow = {
   vehicle_display: string;
   open_order_id: string | null;
   open_trip_id: string | null;
+  route_plan?: WorkflowRoutePlan | null;
   field_states: WorkflowFieldStateMap;
   trip_editable_by_current_user?: boolean;
 };
@@ -100,6 +101,14 @@ type WorkflowGroup = {
   trip_editable_by_current_user?: boolean;
 };
 
+type WorkflowRoutePlan = {
+  collection_mode: 'not_set' | 'direct' | 'collection_trip';
+  reloading_mode: 'not_set' | 'no_reloading' | 'reloading';
+  international_trip_id: string | null;
+  international_trip_number: string | null;
+  setup_status: 'setup_needed' | 'ready';
+};
+
 type WorkflowResponse = {
   viewer_user_id: string;
   viewer_is_elevated: boolean;
@@ -111,6 +120,24 @@ type WorkflowResponse = {
   standalone_rows: WorkflowStandaloneRow[];
 };
 
+type WorkflowCustomColumn = {
+  id: string;
+  owner_organization_id: string;
+  created_by: string;
+  name: string;
+  slug: string;
+  visibility_scope: 'self' | 'selected_organizations';
+  visible_organization_ids: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+type WorkflowCustomColumnsResponse = {
+  viewer_user_id: string;
+  current_organization_id: string | null;
+  custom_columns: WorkflowCustomColumn[];
+};
+
 type WorkflowFieldUpdateResponse = {
   id: string;
   record_type: 'order' | 'trip';
@@ -118,6 +145,11 @@ type WorkflowFieldUpdateResponse = {
   field_key: WorkflowEditableFieldKey;
   value_text: string | null;
   revision: number;
+};
+
+type WorkflowRoutePlanUpdateResponse = {
+  collection_mode: WorkflowRoutePlan['collection_mode'];
+  reloading_mode: WorkflowRoutePlan['reloading_mode'];
 };
 
 type OrganizationOption = {
@@ -133,10 +165,19 @@ type ManagerOption = {
 
 type WorkflowEditingCell = {
   row_id: string;
-  record_type: 'order' | 'trip';
-  record_id: string;
-  field_key: WorkflowEditableFieldKey;
-};
+} & (
+  | {
+      edit_kind: 'workflow_field';
+      record_type: 'order' | 'trip';
+      record_id: string;
+      field_key: WorkflowEditableFieldKey;
+    }
+  | {
+      edit_kind: 'route_plan';
+      order_id: string;
+      plan_key: 'collection_mode' | 'reloading_mode';
+    }
+);
 
 type WorkflowFilters = {
   search: string;
@@ -147,6 +188,9 @@ type WorkflowFilters = {
   deliveryTo: string;
   recordNumber: string;
   kind: string;
+  collectionPlan: string;
+  reloadingPlan: string;
+  internationalPlan: string;
   company: string;
   contact: string;
   sender: string;
@@ -170,6 +214,9 @@ type WorkflowHeaderFilterId =
   | 'delivery'
   | 'record_number'
   | 'kind'
+  | 'collection_plan'
+  | 'reloading_plan'
+  | 'international_plan'
   | 'company'
   | 'contact'
   | 'sender'
@@ -186,10 +233,10 @@ type WorkflowHeaderFilterId =
   | 'profit'
   | 'trip_vehicle';
 
-type WorkflowColumnId = WorkflowHeaderFilterId;
+type WorkflowColumnId = string;
 
-type WorkflowColumnWidths = Record<WorkflowColumnId, number>;
-type WorkflowColumnOrder = WorkflowColumnId[];
+type WorkflowColumnWidths = Record<string, number>;
+type WorkflowColumnOrder = string[];
 type WorkflowRowHeights = Record<string, number>;
 
 const DEFAULT_FILTERS: WorkflowFilters = {
@@ -201,6 +248,9 @@ const DEFAULT_FILTERS: WorkflowFilters = {
   deliveryTo: '',
   recordNumber: '',
   kind: '',
+  collectionPlan: '',
+  reloadingPlan: '',
+  internationalPlan: '',
   company: '',
   contact: '',
   sender: '',
@@ -223,12 +273,27 @@ const WORKFLOW_STATUS_OPTIONS = WORKFLOW_EXECUTION_STATUSES.map((status) => ({
   label: WORKFLOW_EXECUTION_STATUS_LABELS[status],
 }));
 
+const WORKFLOW_COLLECTION_MODE_OPTIONS = [
+  { value: 'not_set', label: 'Not set' },
+  { value: 'direct', label: 'Direct' },
+  { value: 'collection_trip', label: 'Collection trip' },
+] as const;
+
+const WORKFLOW_RELOADING_MODE_OPTIONS = [
+  { value: 'not_set', label: 'Not set' },
+  { value: 'no_reloading', label: 'No reloading' },
+  { value: 'reloading', label: 'Reloading' },
+] as const;
+
 const WORKFLOW_COLUMN_CONFIG = [
   { id: 'status', defaultWidth: 84, minWidth: 52 },
   { id: 'prep', defaultWidth: 88, minWidth: 64 },
   { id: 'delivery', defaultWidth: 92, minWidth: 64 },
   { id: 'record_number', defaultWidth: 170, minWidth: 96 },
   { id: 'kind', defaultWidth: 96, minWidth: 64 },
+  { id: 'collection_plan', defaultWidth: 120, minWidth: 76 },
+  { id: 'reloading_plan', defaultWidth: 120, minWidth: 76 },
+  { id: 'international_plan', defaultWidth: 160, minWidth: 90 },
   { id: 'company', defaultWidth: 170, minWidth: 96 },
   { id: 'contact', defaultWidth: 170, minWidth: 96 },
   { id: 'sender', defaultWidth: 150, minWidth: 96 },
@@ -262,17 +327,35 @@ const DEFAULT_WORKFLOW_COLUMN_ORDER = WORKFLOW_COLUMN_CONFIG.map(
   (column) => column.id
 ) as WorkflowColumnOrder;
 
-const WORKFLOW_COLUMN_MIN_WIDTHS = WORKFLOW_COLUMN_CONFIG.reduce(
-  (acc, column) => {
-    acc[column.id] = column.minWidth;
-    return acc;
-  },
-  {} as WorkflowColumnWidths
-);
-
 const DEFAULT_WORKFLOW_ROW_HEIGHT = 24;
 const MIN_WORKFLOW_ROW_HEIGHT = 18;
 const MAX_WORKFLOW_ROW_HEIGHT = 180;
+const CUSTOM_WORKFLOW_COLUMN_PREFIX = 'custom:';
+const DEFAULT_CUSTOM_WORKFLOW_COLUMN_WIDTH = 160;
+const DEFAULT_CUSTOM_WORKFLOW_COLUMN_MIN_WIDTH = 72;
+
+function buildCustomWorkflowColumnId(columnId: string) {
+  return `${CUSTOM_WORKFLOW_COLUMN_PREFIX}${columnId}`;
+}
+
+function parseCustomWorkflowColumnId(columnId: string) {
+  if (!columnId.startsWith(CUSTOM_WORKFLOW_COLUMN_PREFIX)) {
+    return null;
+  }
+
+  const value = columnId.slice(CUSTOM_WORKFLOW_COLUMN_PREFIX.length).trim();
+  return value || null;
+}
+
+function getDefaultWorkflowColumnWidth(columnId: string) {
+  const fixedColumn = WORKFLOW_COLUMN_CONFIG.find((column) => column.id === columnId);
+  return fixedColumn?.defaultWidth ?? DEFAULT_CUSTOM_WORKFLOW_COLUMN_WIDTH;
+}
+
+function getMinWorkflowColumnWidth(columnId: string) {
+  const fixedColumn = WORKFLOW_COLUMN_CONFIG.find((column) => column.id === columnId);
+  return fixedColumn?.minWidth ?? DEFAULT_CUSTOM_WORKFLOW_COLUMN_MIN_WIDTH;
+}
 
 function formatStatusLabel(value: string | null | undefined) {
   if (!value) return '-';
@@ -318,6 +401,35 @@ function formatManagerLabel(manager: ManagerOption | null | undefined) {
 
   const value = `${manager.first_name || ''} ${manager.last_name || ''}`.trim();
   return value || '-';
+}
+
+function formatWorkflowCollectionMode(
+  value: WorkflowRoutePlan['collection_mode'] | null | undefined
+) {
+  return (
+    WORKFLOW_COLLECTION_MODE_OPTIONS.find((option) => option.value === value)?.label || '-'
+  );
+}
+
+function formatWorkflowReloadingMode(
+  value: WorkflowRoutePlan['reloading_mode'] | null | undefined
+) {
+  return (
+    WORKFLOW_RELOADING_MODE_OPTIONS.find((option) => option.value === value)?.label || '-'
+  );
+}
+
+function formatWorkflowInternationalPlan(routePlan: WorkflowRoutePlan | null | undefined) {
+  if (!routePlan) {
+    return '-';
+  }
+
+  const values = [
+    routePlan.international_trip_number || '-',
+    routePlan.setup_status === 'setup_needed' ? 'Setup needed' : '',
+  ].filter((value) => value && value !== '-');
+
+  return values.length > 0 ? values.join(' / ') : '-';
 }
 
 function removeCompanyCode(value: string | null | undefined) {
@@ -408,6 +520,9 @@ function buildStandaloneSearchText(row: WorkflowStandaloneRow) {
     row.record_number,
     row.client_order_number,
     row.kind,
+    formatWorkflowCollectionMode(row.route_plan?.collection_mode),
+    formatWorkflowReloadingMode(row.route_plan?.reloading_mode),
+    formatWorkflowInternationalPlan(row.route_plan),
     row.status,
     formatStatusLabel(row.status),
     row.company_display,
@@ -447,6 +562,50 @@ function buildGroupSearchText(group: WorkflowGroup) {
     .filter(Boolean)
     .join(' ')
     .toLowerCase();
+}
+
+function buildRoutePlanEditingCell(
+  rowId: string,
+  orderId: string | null | undefined,
+  planKey: 'collection_mode' | 'reloading_mode'
+): WorkflowEditingCell | null {
+  if (!orderId) {
+    return null;
+  }
+
+  return {
+    row_id: rowId,
+    edit_kind: 'route_plan',
+    order_id: orderId,
+    plan_key: planKey,
+  };
+}
+
+function isSameEditingCell(
+  left: WorkflowEditingCell | null,
+  right: WorkflowEditingCell | null
+) {
+  if (!left || !right) {
+    return false;
+  }
+
+  if (left.row_id !== right.row_id || left.edit_kind !== right.edit_kind) {
+    return false;
+  }
+
+  if (left.edit_kind === 'workflow_field' && right.edit_kind === 'workflow_field') {
+    return (
+      left.record_type === right.record_type &&
+      left.record_id === right.record_id &&
+      left.field_key === right.field_key
+    );
+  }
+
+  if (left.edit_kind === 'route_plan' && right.edit_kind === 'route_plan') {
+    return left.order_id === right.order_id && left.plan_key === right.plan_key;
+  }
+
+  return false;
 }
 
 function buildRecordNumberDisplay(row: WorkflowStandaloneRow) {
@@ -582,6 +741,42 @@ function applyFieldUpdateToStandaloneRow(
   }
 
   return nextRow;
+}
+
+function applyRoutePlanToStandaloneRow(
+  row: WorkflowStandaloneRow,
+  routePlan: WorkflowRoutePlan
+) {
+  if (!row.order_id) {
+    return row;
+  }
+
+  return {
+    ...row,
+    route_plan: routePlan,
+  };
+}
+
+function mergeWorkflowRoutePlanForClient(
+  current: WorkflowRoutePlan | null | undefined,
+  update: WorkflowRoutePlanUpdateResponse
+): WorkflowRoutePlan {
+  const internationalTripId = current?.international_trip_id ?? null;
+  const internationalTripNumber = current?.international_trip_number ?? null;
+  const collectionMode = update.collection_mode;
+  const reloadingMode = update.reloading_mode;
+
+  return {
+    collection_mode: collectionMode,
+    reloading_mode: reloadingMode,
+    international_trip_id: internationalTripId,
+    international_trip_number: internationalTripNumber,
+    setup_status:
+      internationalTripId &&
+      (collectionMode === 'not_set' || reloadingMode === 'not_set')
+        ? 'setup_needed'
+        : 'ready',
+  };
 }
 
 function recalculateGroupFooter(group: WorkflowGroup): WorkflowGroupFooter {
@@ -742,14 +937,10 @@ function WorkflowColGroup({
   return (
     <colgroup>
       {columnOrder.map((columnId) => {
-        const column =
-          WORKFLOW_COLUMN_CONFIG.find((entry) => entry.id === columnId) ??
-          WORKFLOW_COLUMN_CONFIG[0];
-
         return (
         <col
           key={columnId}
-          style={{ width: `${columnWidths[columnId] ?? column.defaultWidth}px` }}
+          style={{ width: `${columnWidths[columnId] ?? getDefaultWorkflowColumnWidth(columnId)}px` }}
         />
         );
       })}
@@ -849,6 +1040,7 @@ function WorkflowRowResizeHandle({
 function WorkflowTableHeader({
   filters,
   columnOrder,
+  customColumns,
   headerScope,
   activeHeaderFilter,
   activeHeaderScope,
@@ -865,6 +1057,7 @@ function WorkflowTableHeader({
 }: {
   filters: WorkflowFilters;
   columnOrder: WorkflowColumnOrder;
+  customColumns: WorkflowCustomColumn[];
   headerScope: string;
   activeHeaderFilter: WorkflowHeaderFilterId | null;
   activeHeaderScope: string | null;
@@ -930,6 +1123,29 @@ function WorkflowTableHeader({
       </div>
     </WorkflowHeaderCell>
   );
+
+  const renderCustomHeaderCell = (columnId: string) => {
+    const customColumnId = parseCustomWorkflowColumnId(columnId);
+    const customColumn = customColumns.find((column) => column.id === customColumnId);
+
+    return (
+      <WorkflowHeaderCell
+        key={columnId}
+        columnId={columnId}
+        onStartResize={onStartResize}
+        onResetColumnWidth={onResetColumnWidth}
+        onDragStartColumn={onDragStartColumn}
+        onDragOverColumn={onDragOverColumn}
+        onDropColumn={onDropColumn}
+        onDragEndColumn={onDragEndColumn}
+        isDragTarget={dragOverColumnId === columnId}
+      >
+        <div className="pr-2 text-[10px] font-semibold text-slate-700">
+          {customColumn?.name || 'Custom'}
+        </div>
+      </WorkflowHeaderCell>
+    );
+  };
 
   const headerCells: Record<WorkflowColumnId, ReactNode> = {
     status: (
@@ -1042,6 +1258,9 @@ function WorkflowTableHeader({
     ),
     record_number: renderTextFilter('record_number', 'No. / Trip', 'recordNumber', 'w-44', 'Order, client or trip no.'),
     kind: renderTextFilter('kind', 'Kind', 'kind', 'w-32', 'Kind'),
+    collection_plan: renderTextFilter('collection_plan', 'Collection', 'collectionPlan', 'w-36', 'Collection'),
+    reloading_plan: renderTextFilter('reloading_plan', 'Reloading', 'reloadingPlan', 'w-36', 'Reloading'),
+    international_plan: renderTextFilter('international_plan', 'Intl trip', 'internationalPlan', 'w-40', 'Trip / setup'),
     company: renderTextFilter('company', 'Company', 'company', 'w-40', 'Company'),
     contact: renderTextFilter('contact', 'Contact', 'contact', 'w-40', 'Contact'),
     sender: renderTextFilter('sender', 'Sender', 'sender', 'w-36', 'Sender'),
@@ -1061,7 +1280,17 @@ function WorkflowTableHeader({
 
   return (
     <thead className="border-b bg-slate-50">
-      <tr>{columnOrder.map((columnId) => <Fragment key={columnId}>{headerCells[columnId]}</Fragment>)}</tr>
+      <tr>
+        {columnOrder.map((columnId) =>
+          headerCells[columnId as WorkflowHeaderFilterId] ? (
+            <Fragment key={columnId}>
+              {headerCells[columnId as WorkflowHeaderFilterId]}
+            </Fragment>
+          ) : (
+            renderCustomHeaderCell(columnId)
+          )
+        )}
+      </tr>
     </thead>
   );
 }
@@ -1160,6 +1389,7 @@ function WorkflowDisplayCell({
 function WorkflowStandaloneRowView({
   row,
   columnOrder,
+  customColumns,
   onOpenOrder,
   onOpenTrip,
   onAcknowledgeField,
@@ -1176,6 +1406,7 @@ function WorkflowStandaloneRowView({
 }: {
   row: WorkflowStandaloneRow;
   columnOrder: WorkflowColumnOrder;
+  customColumns: WorkflowCustomColumn[];
   onOpenOrder: (orderId: string) => void;
   onOpenTrip: (tripId: string) => void;
   onAcknowledgeField: (
@@ -1208,6 +1439,7 @@ function WorkflowStandaloneRowView({
     row.order_id
       ? {
           row_id: row.id,
+          edit_kind: 'workflow_field' as const,
           record_type: 'order' as const,
           record_id: row.order_id,
           field_key: fieldKey,
@@ -1218,6 +1450,7 @@ function WorkflowStandaloneRowView({
     row.trip_id
       ? {
           row_id: row.id,
+          edit_kind: 'workflow_field' as const,
           record_type: 'trip' as const,
           record_id: row.trip_id,
           field_key: fieldKey,
@@ -1225,17 +1458,22 @@ function WorkflowStandaloneRowView({
       : null;
 
   const matchesEditingCell = (cell: WorkflowEditingCell | null) =>
-    !!cell &&
-    !!editingCell &&
-    cell.row_id === editingCell.row_id &&
-    cell.record_type === editingCell.record_type &&
-    cell.record_id === editingCell.record_id &&
-    cell.field_key === editingCell.field_key;
+    isSameEditingCell(cell, editingCell);
 
   const canEditTripOwnedField =
     allowAcknowledge && !!row.trip_editable_by_current_user && !!row.trip_id;
   const canEditOrderField = allowAcknowledge && !!row.order_id;
   const canEditTripField = allowAcknowledge && row.row_type === 'trip_row' && !!row.trip_id;
+  const collectionPlanCell = buildRoutePlanEditingCell(
+    row.id,
+    row.order_id,
+    'collection_mode'
+  );
+  const reloadingPlanCell = buildRoutePlanEditingCell(
+    row.id,
+    row.order_id,
+    'reloading_mode'
+  );
   const statusCell =
     row.row_type === 'trip_row' ? tripFieldCell('status') : orderFieldCell('status');
   const canEditStatus = allowAcknowledge && !!statusCell;
@@ -1305,6 +1543,74 @@ function WorkflowStandaloneRowView({
     kind: (
       <td className="px-2 py-1.5 whitespace-nowrap">
         <CompactCell value={row.kind} />
+      </td>
+    ),
+    collection_plan: (
+      <td className="px-2 py-1.5 whitespace-nowrap">
+        <WorkflowDisplayCell
+          value={formatWorkflowCollectionMode(row.route_plan?.collection_mode)}
+          editable={canEditOrderField && !!collectionPlanCell}
+          onStartEdit={
+            canEditOrderField && collectionPlanCell
+              ? () =>
+                  onStartEdit(
+                    collectionPlanCell,
+                    row.route_plan?.collection_mode || 'not_set'
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(collectionPlanCell)}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
+          selectOptions={WORKFLOW_COLLECTION_MODE_OPTIONS.map((option) => ({
+            value: option.value,
+            label: option.label,
+          }))}
+        />
+      </td>
+    ),
+    reloading_plan: (
+      <td className="px-2 py-1.5 whitespace-nowrap">
+        <WorkflowDisplayCell
+          value={formatWorkflowReloadingMode(row.route_plan?.reloading_mode)}
+          editable={canEditOrderField && !!reloadingPlanCell}
+          onStartEdit={
+            canEditOrderField && reloadingPlanCell
+              ? () =>
+                  onStartEdit(
+                    reloadingPlanCell,
+                    row.route_plan?.reloading_mode || 'not_set'
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(reloadingPlanCell)}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
+          selectOptions={WORKFLOW_RELOADING_MODE_OPTIONS.map((option) => ({
+            value: option.value,
+            label: option.label,
+          }))}
+        />
+      </td>
+    ),
+    international_plan: (
+      <td className="px-2 py-1.5 whitespace-nowrap">
+        {row.route_plan?.international_trip_id ? (
+          <button
+            type="button"
+            onClick={() => onOpenTrip(row.route_plan!.international_trip_id!)}
+            className="block w-full text-left"
+            title={formatWorkflowInternationalPlan(row.route_plan)}
+          >
+            <CompactCell value={formatWorkflowInternationalPlan(row.route_plan)} scrollable />
+          </button>
+        ) : (
+          <CompactCell value={formatWorkflowInternationalPlan(row.route_plan)} scrollable />
+        )}
       </td>
     ),
     company: (
@@ -1662,10 +1968,23 @@ function WorkflowStandaloneRowView({
     ),
   };
 
+  const renderCustomCell = (columnId: string) => {
+    const customColumnId = parseCustomWorkflowColumnId(columnId);
+    const customColumn = customColumns.find((column) => column.id === customColumnId);
+
+    return (
+      <td className="px-2 py-1.5" title={customColumn?.name || 'Custom column'}>
+        <CompactCell value="-" scrollable />
+      </td>
+    );
+  };
+
   return (
     <tr className="border-b hover:bg-slate-50" style={rowStyle}>
       {columnOrder.map((columnId) => (
-        <Fragment key={`${row.id}-${columnId}`}>{cells[columnId]}</Fragment>
+        <Fragment key={`${row.id}-${columnId}`}>
+          {cells[columnId] ?? renderCustomCell(columnId)}
+        </Fragment>
       ))}
     </tr>
   );
@@ -1674,6 +1993,7 @@ function WorkflowStandaloneRowView({
 function GroupageBlock({
   group,
   columnOrder,
+  customColumns,
   headerScope,
   onOpenOrder,
   onOpenTrip,
@@ -1706,6 +2026,7 @@ function GroupageBlock({
 }: {
   group: WorkflowGroup;
   columnOrder: WorkflowColumnOrder;
+  customColumns: WorkflowCustomColumn[];
   headerScope: string;
   onOpenOrder: (orderId: string) => void;
   onOpenTrip: (tripId: string) => void;
@@ -1756,6 +2077,7 @@ function GroupageBlock({
 
   const groupHeaderCell = (fieldKey: WorkflowEditableFieldKey): WorkflowEditingCell => ({
     row_id: group.id,
+    edit_kind: 'workflow_field',
     record_type: 'trip',
     record_id: group.trip_id,
     field_key: fieldKey,
@@ -1763,18 +2085,14 @@ function GroupageBlock({
 
   const groupFooterCell = (fieldKey: WorkflowEditableFieldKey): WorkflowEditingCell => ({
     row_id: group.footer.id,
+    edit_kind: 'workflow_field',
     record_type: 'trip',
     record_id: group.trip_id,
     field_key: fieldKey,
   });
 
   const matchesEditingCell = (cell: WorkflowEditingCell | null) =>
-    !!cell &&
-    !!editingCell &&
-    cell.row_id === editingCell.row_id &&
-    cell.record_type === editingCell.record_type &&
-    cell.record_id === editingCell.record_id &&
-    cell.field_key === editingCell.field_key;
+    isSameEditingCell(cell, editingCell);
 
   const headerCells: Record<WorkflowColumnId, ReactNode> = {
     status: (
@@ -1823,6 +2141,20 @@ function GroupageBlock({
     kind: (
       <td className="px-2 py-1 whitespace-nowrap font-medium text-amber-900">
         <CompactCell value="Groupage start" />
+      </td>
+    ),
+    collection_plan: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    reloading_plan: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    international_plan: (
+      <td className="px-2 py-1 whitespace-nowrap">
+        <button
+          type="button"
+          onClick={() => onOpenTrip(group.trip_id)}
+          className="block w-full text-left"
+          title={group.trip_number}
+        >
+          <CompactCell value={group.trip_number} scrollable />
+        </button>
       </td>
     ),
     company: (
@@ -1909,6 +2241,17 @@ function GroupageBlock({
     ),
   };
 
+  const renderCustomBodyCell = (columnId: string) => {
+    const customColumnId = parseCustomWorkflowColumnId(columnId);
+    const customColumn = customColumns.find((column) => column.id === customColumnId);
+
+    return (
+      <td className="px-2 py-1" title={customColumn?.name || 'Custom column'}>
+        <CompactCell value="-" scrollable />
+      </td>
+    );
+  };
+
   const footerCells: Record<WorkflowColumnId, ReactNode> = {
     status: (
       <td className="group/row-resize relative px-2 py-1 whitespace-nowrap">
@@ -1923,6 +2266,9 @@ function GroupageBlock({
     delivery: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
     record_number: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="Summary" /></td>,
     kind: <td className="px-2 py-1 whitespace-nowrap text-amber-900"><CompactCell value="Groupage end" /></td>,
+    collection_plan: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    reloading_plan: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    international_plan: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
     company: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
     contact: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
     sender: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
@@ -1996,6 +2342,7 @@ function GroupageBlock({
         <WorkflowTableHeader
           filters={filters}
           columnOrder={columnOrder}
+          customColumns={customColumns}
           headerScope={headerScope}
           activeHeaderFilter={activeHeaderFilter}
           activeHeaderScope={activeHeaderScope}
@@ -2016,7 +2363,9 @@ function GroupageBlock({
             style={getRowStyle(group.id)}
           >
             {columnOrder.map((columnId) => (
-              <Fragment key={`${group.id}-${columnId}`}>{headerCells[columnId]}</Fragment>
+              <Fragment key={`${group.id}-${columnId}`}>
+                {headerCells[columnId] ?? renderCustomBodyCell(columnId)}
+              </Fragment>
             ))}
           </tr>
 
@@ -2025,6 +2374,7 @@ function GroupageBlock({
               key={row.id}
               row={row}
               columnOrder={columnOrder}
+              customColumns={customColumns}
               onOpenOrder={onOpenOrder}
               onOpenTrip={onOpenTrip}
               onAcknowledgeField={onAcknowledgeField}
@@ -2046,7 +2396,9 @@ function GroupageBlock({
             style={getRowStyle(group.footer.id)}
           >
             {columnOrder.map((columnId) => (
-              <Fragment key={`${group.footer.id}-${columnId}`}>{footerCells[columnId]}</Fragment>
+              <Fragment key={`${group.footer.id}-${columnId}`}>
+                {footerCells[columnId] ?? renderCustomBodyCell(columnId)}
+              </Fragment>
             ))}
           </tr>
         </tbody>
@@ -2064,6 +2416,7 @@ export default function WorkflowPage() {
   const [currentOrganizationId, setCurrentOrganizationId] = useState('');
   const [groupageGroups, setGroupageGroups] = useState<WorkflowGroup[]>([]);
   const [standaloneRows, setStandaloneRows] = useState<WorkflowStandaloneRow[]>([]);
+  const [customColumns, setCustomColumns] = useState<WorkflowCustomColumn[]>([]);
   const [filters, setFilters] = useState<WorkflowFilters>(DEFAULT_FILTERS);
   const [filtersHydrated, setFiltersHydrated] = useState(false);
   const [columnWidths, setColumnWidths] = useState<WorkflowColumnWidths>(
@@ -2097,6 +2450,12 @@ export default function WorkflowPage() {
   const [selectedManagerUserId, setSelectedManagerUserId] = useState('');
   const [loadingOrganizations, setLoadingOrganizations] = useState(false);
   const [loadingManagers, setLoadingManagers] = useState(false);
+  const [showCustomColumnForm, setShowCustomColumnForm] = useState(false);
+  const [customColumnName, setCustomColumnName] = useState('');
+  const [customColumnVisibilityScope, setCustomColumnVisibilityScope] =
+    useState<'self' | 'selected_organizations'>('self');
+  const [customColumnOrganizationIds, setCustomColumnOrganizationIds] = useState<string[]>([]);
+  const [creatingCustomColumn, setCreatingCustomColumn] = useState(false);
   const [editingCell, setEditingCell] = useState<WorkflowEditingCell | null>(null);
   const [editingValue, setEditingValue] = useState('');
   const [savingField, setSavingField] = useState(false);
@@ -2159,14 +2518,13 @@ export default function WorkflowPage() {
         return;
       }
 
-      const parsed = JSON.parse(saved) as Partial<WorkflowColumnWidths>;
-      const nextWidths = { ...DEFAULT_WORKFLOW_COLUMN_WIDTHS };
+      const parsed = JSON.parse(saved) as Record<string, unknown>;
+      const nextWidths = { ...DEFAULT_WORKFLOW_COLUMN_WIDTHS } as WorkflowColumnWidths;
 
-      for (const column of WORKFLOW_COLUMN_CONFIG) {
-        const rawWidth = parsed[column.id];
+      for (const [columnId, rawWidth] of Object.entries(parsed)) {
         if (typeof rawWidth === 'number' && Number.isFinite(rawWidth)) {
-          nextWidths[column.id] = Math.max(
-            WORKFLOW_COLUMN_MIN_WIDTHS[column.id],
+          nextWidths[columnId] = Math.max(
+            getMinWorkflowColumnWidth(columnId),
             Math.round(rawWidth)
           );
         }
@@ -2207,14 +2565,12 @@ export default function WorkflowPage() {
       } else {
         const parsed = JSON.parse(saved) as unknown;
         if (Array.isArray(parsed)) {
-          const normalized = parsed.filter((value): value is WorkflowColumnId =>
-            DEFAULT_WORKFLOW_COLUMN_ORDER.includes(value as WorkflowColumnId)
-          );
-          const missing = DEFAULT_WORKFLOW_COLUMN_ORDER.filter(
-            (columnId) => !normalized.includes(columnId)
+          const normalized = parsed.filter(
+            (value): value is WorkflowColumnId =>
+              typeof value === 'string' && value.trim() !== ''
           );
           setColumnOrder(
-            normalized.length > 0 ? [...normalized, ...missing] : DEFAULT_WORKFLOW_COLUMN_ORDER
+            normalized.length > 0 ? normalized : DEFAULT_WORKFLOW_COLUMN_ORDER
           );
         } else {
           setColumnOrder(DEFAULT_WORKFLOW_COLUMN_ORDER);
@@ -2227,6 +2583,45 @@ export default function WorkflowPage() {
       setColumnOrderHydrated(true);
     }
   }, [viewerUserId]);
+
+  useEffect(() => {
+    const availableColumnIds = [
+      ...DEFAULT_WORKFLOW_COLUMN_ORDER,
+      ...customColumns.map((column) => buildCustomWorkflowColumnId(column.id)),
+    ];
+
+    setColumnWidths((prev) => {
+      let changed = false;
+      const next: WorkflowColumnWidths = {};
+
+      for (const columnId of availableColumnIds) {
+        const existingWidth = prev[columnId];
+        if (typeof existingWidth === 'number' && Number.isFinite(existingWidth)) {
+          next[columnId] = Math.max(
+            getMinWorkflowColumnWidth(columnId),
+            Math.round(existingWidth)
+          );
+        } else {
+          next[columnId] = getDefaultWorkflowColumnWidth(columnId);
+          changed = true;
+        }
+      }
+
+      if (Object.keys(prev).length !== Object.keys(next).length) {
+        changed = true;
+      }
+
+      return changed ? next : prev;
+    });
+
+    setColumnOrder((prev) => {
+      const normalized = prev.filter((columnId) => availableColumnIds.includes(columnId));
+      const missing = availableColumnIds.filter((columnId) => !normalized.includes(columnId));
+      const next = [...normalized, ...missing];
+
+      return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+    });
+  }, [customColumns]);
 
   useEffect(() => {
     if (!viewerUserId || !columnOrderHydrated) {
@@ -2308,7 +2703,7 @@ export default function WorkflowPage() {
     }
 
     const handleMouseMove = (event: MouseEvent) => {
-      const minWidth = WORKFLOW_COLUMN_MIN_WIDTHS[resizingColumn.columnId];
+      const minWidth = getMinWorkflowColumnWidth(resizingColumn.columnId);
       const nextWidth = Math.max(
         minWidth,
         Math.round(resizingColumn.startWidth + (event.clientX - resizingColumn.startX))
@@ -2443,6 +2838,7 @@ export default function WorkflowPage() {
       setCurrentOrganizationId(data.current_organization_id || '');
       setGroupageGroups(data.groupage_groups || []);
       setStandaloneRows(data.standalone_rows || []);
+      void fetchCustomColumns();
 
       if (data.viewer_is_elevated) {
         setSelectedOrganizationId((prev) => prev || data.current_organization_id || '');
@@ -2453,6 +2849,29 @@ export default function WorkflowPage() {
       setStandaloneRows([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchCustomColumns = async () => {
+    try {
+      const res = await fetch('/api/workflow/custom-columns/list', {
+        method: 'GET',
+      });
+
+      const data = (await res.json()) as WorkflowCustomColumnsResponse & {
+        error?: string;
+      };
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to load custom columns');
+        setCustomColumns([]);
+        return;
+      }
+
+      setCustomColumns(data.custom_columns || []);
+    } catch (error) {
+      toast.error('Failed to load custom columns');
+      setCustomColumns([]);
     }
   };
 
@@ -2467,14 +2886,36 @@ export default function WorkflowPage() {
           managerUserId: undefined,
         };
 
+  const findCurrentRoutePlan = (orderId: string) => {
+    for (const row of standaloneRows) {
+      if (row.order_id === orderId) {
+        return row.route_plan ?? null;
+      }
+    }
+
+    for (const group of groupageGroups) {
+      for (const row of group.rows) {
+        if (row.order_id === orderId) {
+          return row.route_plan ?? null;
+        }
+      }
+    }
+
+    return null;
+  };
+
   const canAcknowledgeWorkflow =
     !!viewerUserId &&
     !!effectiveManagerUserId &&
     viewerUserId === effectiveManagerUserId;
 
   const workflowTableMinWidth = useMemo(
-    () => Object.values(columnWidths).reduce((sum, width) => sum + width, 0),
-    [columnWidths]
+    () =>
+      columnOrder.reduce(
+        (sum, columnId) => sum + (columnWidths[columnId] ?? getDefaultWorkflowColumnWidth(columnId)),
+        0
+      ),
+    [columnOrder, columnWidths]
   );
 
   const startColumnResize = (columnId: WorkflowColumnId, clientX: number) => {
@@ -2483,14 +2924,14 @@ export default function WorkflowPage() {
     setResizingColumn({
       columnId,
       startX: clientX,
-      startWidth: columnWidths[columnId] ?? DEFAULT_WORKFLOW_COLUMN_WIDTHS[columnId],
+      startWidth: columnWidths[columnId] ?? getDefaultWorkflowColumnWidth(columnId),
     });
   };
 
   const resetColumnWidth = (columnId: WorkflowColumnId) => {
     setColumnWidths((prev) => ({
       ...prev,
-      [columnId]: DEFAULT_WORKFLOW_COLUMN_WIDTHS[columnId],
+      [columnId]: getDefaultWorkflowColumnWidth(columnId),
     }));
   };
 
@@ -2635,39 +3076,99 @@ export default function WorkflowPage() {
     try {
       setSavingField(true);
 
-      const response = await fetch('/api/workflow/field/update', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          record_type: editingCell.record_type,
-          record_id: editingCell.record_id,
-          field_key: editingCell.field_key,
-          value_text: editingValue.trim() === '' ? null : editingValue.trim(),
-        }),
-      });
+      const response =
+        editingCell.edit_kind === 'workflow_field'
+          ? await fetch('/api/workflow/field/update', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                record_type: editingCell.record_type,
+                record_id: editingCell.record_id,
+                field_key: editingCell.field_key,
+                value_text: editingValue.trim() === '' ? null : editingValue.trim(),
+              }),
+            })
+          : await (() => {
+              const currentRoutePlan = findCurrentRoutePlan(editingCell.order_id);
+              const nextCollectionMode =
+                editingCell.plan_key === 'collection_mode'
+                  ? editingValue
+                  : currentRoutePlan?.collection_mode || 'not_set';
+              const nextReloadingMode =
+                editingCell.plan_key === 'reloading_mode'
+                  ? editingValue
+                  : currentRoutePlan?.reloading_mode || 'not_set';
+
+              return fetch('/api/workflow/route-plan/update', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  order_id: editingCell.order_id,
+                  collection_mode: nextCollectionMode,
+                  reloading_mode: nextReloadingMode,
+                }),
+              });
+            })();
 
       const data = await response.json();
 
       if (!response.ok) {
-        toast.error(data.error || 'Failed to save workflow field');
+        toast.error(
+          data.error ||
+            (editingCell.edit_kind === 'workflow_field'
+              ? 'Failed to save workflow field'
+              : 'Failed to save workflow route plan')
+        );
         return;
       }
 
-      const savedFieldUpdate = data.field_update as WorkflowFieldUpdateResponse | undefined;
+      if (editingCell.edit_kind === 'workflow_field') {
+        const savedFieldUpdate = data.field_update as WorkflowFieldUpdateResponse | undefined;
 
-      if (savedFieldUpdate) {
-        const localFieldState = buildPendingFieldState(savedFieldUpdate);
+        if (savedFieldUpdate) {
+          const localFieldState = buildPendingFieldState(savedFieldUpdate);
 
-        setGroupageGroups((prev) =>
-          prev.map((group) => applyFieldUpdateToGroup(group, savedFieldUpdate, localFieldState))
-        );
-        setStandaloneRows((prev) =>
-          prev.map((row) =>
-            applyFieldUpdateToStandaloneRow(row, savedFieldUpdate, localFieldState)
-          )
-        );
+          setGroupageGroups((prev) =>
+            prev.map((group) => applyFieldUpdateToGroup(group, savedFieldUpdate, localFieldState))
+          );
+          setStandaloneRows((prev) =>
+            prev.map((row) =>
+              applyFieldUpdateToStandaloneRow(row, savedFieldUpdate, localFieldState)
+            )
+          );
+        }
+      } else {
+        const routePlanUpdate = data.route_plan as WorkflowRoutePlanUpdateResponse | undefined;
+
+        if (routePlanUpdate) {
+          setGroupageGroups((prev) =>
+            prev.map((group) => ({
+              ...group,
+              rows: group.rows.map((row) =>
+                row.order_id === editingCell.order_id
+                  ? applyRoutePlanToStandaloneRow(
+                      row,
+                      mergeWorkflowRoutePlanForClient(row.route_plan, routePlanUpdate)
+                    )
+                  : row
+              ),
+            }))
+          );
+          setStandaloneRows((prev) =>
+            prev.map((row) =>
+              row.order_id === editingCell.order_id
+                ? applyRoutePlanToStandaloneRow(
+                    row,
+                    mergeWorkflowRoutePlanForClient(row.route_plan, routePlanUpdate)
+                  )
+                : row
+            )
+          );
+        }
       }
 
       setEditingCell(null);
@@ -2748,6 +3249,81 @@ export default function WorkflowPage() {
     }
   };
 
+  const toggleCustomColumnOrganization = (organizationId: string) => {
+    setCustomColumnOrganizationIds((prev) =>
+      prev.includes(organizationId)
+        ? prev.filter((value) => value !== organizationId)
+        : [...prev, organizationId]
+    );
+  };
+
+  const openCreateCustomColumnForm = async () => {
+    if (organizations.length === 0) {
+      await fetchOrganizations();
+    }
+
+    setCustomColumnName('');
+    setCustomColumnVisibilityScope('self');
+    setCustomColumnOrganizationIds([]);
+    setShowCustomColumnForm(true);
+  };
+
+  const createCustomColumn = async () => {
+    if (!customColumnName.trim()) {
+      toast.error('Column name is required');
+      return;
+    }
+
+    if (
+      customColumnVisibilityScope === 'selected_organizations' &&
+      customColumnOrganizationIds.length === 0
+    ) {
+      toast.error('Select at least one organization');
+      return;
+    }
+
+    try {
+      setCreatingCustomColumn(true);
+
+      const res = await fetch('/api/workflow/custom-columns/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: customColumnName,
+          visibility_scope: customColumnVisibilityScope,
+          organization_ids:
+            customColumnVisibilityScope === 'selected_organizations'
+              ? customColumnOrganizationIds
+              : [],
+        }),
+      });
+
+      const data = (await res.json()) as {
+        success?: boolean;
+        error?: string;
+        custom_column?: WorkflowCustomColumn;
+      };
+
+      if (!res.ok || !data.custom_column) {
+        toast.error(data.error || 'Failed to create custom column');
+        return;
+      }
+
+      setCustomColumns((prev) => [...prev, data.custom_column!]);
+      setShowCustomColumnForm(false);
+      setCustomColumnName('');
+      setCustomColumnVisibilityScope('self');
+      setCustomColumnOrganizationIds([]);
+      toast.success('Custom column created');
+    } catch (error) {
+      toast.error('Failed to create custom column');
+    } finally {
+      setCreatingCustomColumn(false);
+    }
+  };
+
   const filteredData = useMemo(() => {
     const rowMatchesFilters = (row: WorkflowStandaloneRow) => {
       const globalSearch = filters.search.trim().toLowerCase();
@@ -2769,6 +3345,18 @@ export default function WorkflowPage() {
         matchesDateRange(row.delivery_date, filters.deliveryFrom, filters.deliveryTo) &&
         matchesText(buildRecordNumberDisplay(row), filters.recordNumber) &&
         matchesText(row.kind, filters.kind) &&
+        matchesText(
+          formatWorkflowCollectionMode(row.route_plan?.collection_mode),
+          filters.collectionPlan
+        ) &&
+        matchesText(
+          formatWorkflowReloadingMode(row.route_plan?.reloading_mode),
+          filters.reloadingPlan
+        ) &&
+        matchesText(
+          formatWorkflowInternationalPlan(row.route_plan),
+          filters.internationalPlan
+        ) &&
         matchesText(removeCompanyCode(row.company_display), filters.company) &&
         matchesText(row.contact_display, filters.contact) &&
         matchesText(row.shipper_name, filters.sender) &&
@@ -2814,6 +3402,9 @@ export default function WorkflowPage() {
         !filters.deliveryTo &&
         matchesText(group.trip_number, filters.recordNumber) &&
         matchesText('Groupage', filters.kind) &&
+        !filters.collectionPlan.trim() &&
+        !filters.reloadingPlan.trim() &&
+        matchesText(group.trip_number, filters.internationalPlan) &&
         matchesText(removeCompanyCode(group.carrier_display), filters.company) &&
         matchesText(group.responsible_display, filters.contact) &&
         !filters.sender.trim() &&
@@ -2988,6 +3579,16 @@ export default function WorkflowPage() {
             >
               Reset filters
             </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                void openCreateCustomColumnForm();
+              }}
+              className="inline-flex items-center justify-center rounded-md bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
+            >
+              Add column
+            </button>
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center gap-3 md:flex-row">
@@ -3005,8 +3606,93 @@ export default function WorkflowPage() {
             >
               Reset filters
             </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                void openCreateCustomColumnForm();
+              }}
+              className="inline-flex items-center justify-center rounded-md bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
+            >
+              Add column
+            </button>
           </div>
         )}
+
+        {showCustomColumnForm ? (
+          <div className="rounded-xl border bg-slate-50 p-4">
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,220px)_180px_minmax(0,1fr)_auto] lg:items-start">
+              <input
+                value={customColumnName}
+                onChange={(event) => setCustomColumnName(event.target.value)}
+                placeholder="Column name"
+                className="w-full rounded-md border bg-white px-3 py-2 text-sm"
+              />
+
+              <select
+                value={customColumnVisibilityScope}
+                onChange={(event) =>
+                  setCustomColumnVisibilityScope(
+                    event.target.value as 'self' | 'selected_organizations'
+                  )
+                }
+                className="w-full rounded-md border bg-white px-3 py-2 text-sm"
+              >
+                <option value="self">Only me</option>
+                <option value="selected_organizations">Selected organizations</option>
+              </select>
+
+              {customColumnVisibilityScope === 'selected_organizations' ? (
+                <div className="rounded-md border bg-white p-2">
+                  <div className="mb-2 text-xs font-medium text-slate-600">
+                    Visible for organizations
+                  </div>
+                  <div className="max-h-32 space-y-2 overflow-y-auto pr-1">
+                    {organizations.map((organization) => (
+                      <label
+                        key={organization.id}
+                        className="flex items-center gap-2 text-sm text-slate-700"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={customColumnOrganizationIds.includes(organization.id)}
+                          onChange={() =>
+                            toggleCustomColumnOrganization(organization.id)
+                          }
+                        />
+                        <span>{organization.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex h-full items-center rounded-md border bg-white px-3 py-2 text-sm text-slate-500">
+                  Column will be visible only in your workflow.
+                </div>
+              )}
+
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void createCustomColumn();
+                  }}
+                  disabled={creatingCustomColumn}
+                  className="inline-flex items-center justify-center rounded-md bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800 disabled:opacity-60"
+                >
+                  {creatingCustomColumn ? 'Creating...' : 'Create'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowCustomColumnForm(false)}
+                  className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm hover:bg-white"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="space-y-4">
@@ -3029,6 +3715,7 @@ export default function WorkflowPage() {
                 key={group.id}
                 group={group}
                 columnOrder={columnOrder}
+                customColumns={customColumns}
                 headerScope={`group-${group.id}`}
                 onOpenOrder={(orderId) => router.push(`/app/orders/${orderId}`)}
                 onOpenTrip={(tripId) => router.push(`/app/trips/${tripId}`)}
@@ -3071,6 +3758,7 @@ export default function WorkflowPage() {
                   <WorkflowTableHeader
                     filters={filters}
                     columnOrder={columnOrder}
+                    customColumns={customColumns}
                     headerScope="standalone"
                     activeHeaderFilter={activeHeaderFilter}
                     activeHeaderScope={activeHeaderScope}
@@ -3091,6 +3779,7 @@ export default function WorkflowPage() {
                         key={row.id}
                         row={row}
                         columnOrder={columnOrder}
+                        customColumns={customColumns}
                         onOpenOrder={(orderId) => router.push(`/app/orders/${orderId}`)}
                         onOpenTrip={(tripId) => router.push(`/app/trips/${tripId}`)}
                         onAcknowledgeField={acknowledgeWorkflowField}

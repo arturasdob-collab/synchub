@@ -17,6 +17,11 @@ import {
   loadWorkflowFieldUpdates,
 } from '@/lib/server/workflow-field-updates';
 import type { WorkflowEditableFieldKey, WorkflowRecordType } from '@/lib/constants/workflow-fields';
+import {
+  buildDerivedWorkflowRoutePlan,
+  loadWorkflowRoutePlans,
+  mergeWorkflowRoutePlan,
+} from '@/lib/server/workflow-route-plans';
 
 type ServiceSupabase = any;
 
@@ -405,6 +410,39 @@ async function loadOrderTripLinks(
   return Array.from(linkMap.values());
 }
 
+async function loadCargoLegTypesByOrderTripLinkId(
+  serviceSupabase: ServiceSupabase,
+  orderTripLinkIds: string[]
+) {
+  const legTypesByOrderTripLinkId = new Map<string, string[]>();
+
+  if (orderTripLinkIds.length === 0) {
+    return legTypesByOrderTripLinkId;
+  }
+
+  const { data, error } = await serviceSupabase
+    .from('cargo_legs')
+    .select('order_trip_link_id, leg_type')
+    .in('order_trip_link_id', orderTripLinkIds);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  for (const row of data || []) {
+    if (!(row as any).order_trip_link_id || typeof (row as any).leg_type !== 'string') {
+      continue;
+    }
+
+    const key = (row as any).order_trip_link_id as string;
+    const current = legTypesByOrderTripLinkId.get(key) || [];
+    current.push((row as any).leg_type as string);
+    legTypesByOrderTripLinkId.set(key, current);
+  }
+
+  return legTypesByOrderTripLinkId;
+}
+
 function buildOrderRow(params: {
   order: any;
   effectiveOrganizationId: string;
@@ -412,6 +450,13 @@ function buildOrderRow(params: {
   linkedTrip: any | null;
   currentUserId: string;
   kind?: 'Order' | 'Groupage cargo';
+  routePlan?: {
+    collection_mode: string;
+    reloading_mode: string;
+    international_trip_id: string | null;
+    international_trip_number: string | null;
+    setup_status: string;
+  } | null;
 }) {
   const {
     order,
@@ -494,6 +539,7 @@ function buildOrderRow(params: {
     field_states: {},
     trip_editable_by_current_user:
       !!linkedTrip?.id && linkedTrip?.created_by === currentUserId,
+    route_plan: params.routePlan ?? null,
   };
 }
 
@@ -503,6 +549,13 @@ function buildTripRow(params: {
   relatedOrder: any | null;
   sourceOrganizationMap: Map<string, { name: string | null }>;
   currentUserId: string;
+  routePlan?: {
+    collection_mode: string;
+    reloading_mode: string;
+    international_trip_id: string | null;
+    international_trip_number: string | null;
+    setup_status: string;
+  } | null;
 }) {
   const {
     trip,
@@ -591,6 +644,7 @@ function buildTripRow(params: {
       relatedOrder?.organization_id && relatedOrder.organization_id !== effectiveOrganizationId
         ? sourceOrganizationMap.get(relatedOrder.organization_id)?.name || '-'
         : null,
+    route_plan: params.routePlan ?? null,
   };
 }
 
@@ -728,6 +782,17 @@ export async function GET(req: NextRequest) {
     for (const order of linkedOrders) {
       orderMap.set((order as any).id, order);
     }
+
+    const workflowRoutePlans = await loadWorkflowRoutePlans(
+      serviceSupabase,
+      Array.from(orderMap.keys())
+    );
+    const cargoLegTypesByOrderTripLinkId = await loadCargoLegTypesByOrderTripLinkId(
+      serviceSupabase,
+      orderTripLinks
+        .map((link: any) => (typeof link?.id === 'string' ? link.id : ''))
+        .filter((value: string) => value !== '')
+    );
 
     const sourceOrganizationIds = Array.from(
       new Set(
@@ -993,6 +1058,28 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    const buildRoutePlanForOrder = (params: {
+      orderId: string;
+      linkedTrip: any | null;
+      orderTripLinksForOrder: any[];
+    }) => {
+      const storedPlan = workflowRoutePlans.get(params.orderId) || null;
+      const cargoLegTypes = params.orderTripLinksForOrder.flatMap((link: any) =>
+        cargoLegTypesByOrderTripLinkId.get(link.id as string) || []
+      );
+
+      return mergeWorkflowRoutePlan({
+        storedPlan,
+        derivedPlan: buildDerivedWorkflowRoutePlan({
+          linkedTripId: params.linkedTrip?.id ?? null,
+          cargoLegTypes,
+        }),
+        linkedTripId: params.linkedTrip?.id ?? null,
+        linkedTripNumber: params.linkedTrip?.trip_number ?? null,
+        linkedTripIsGroupage: params.linkedTrip?.is_groupage ?? null,
+      });
+    };
+
     const groupageTrips = Array.from(tripMap.values())
       .filter((trip: any) => trip?.is_groupage && linksByTripId.has(trip.id))
       .sort((left: any, right: any) =>
@@ -1025,6 +1112,13 @@ export async function GET(req: NextRequest) {
               linkedTrip: trip,
               currentUserId: user.id,
               kind: 'Groupage cargo',
+              routePlan: buildRoutePlanForOrder({
+                orderId: order.id as string,
+                linkedTrip: trip,
+                orderTripLinksForOrder: (linksByOrderId.get(order.id) || []).filter(
+                  (link: any) => link.trip_id === trip.id
+                ),
+              }),
             })
           ),
           {
@@ -1151,6 +1245,11 @@ export async function GET(req: NextRequest) {
               sourceOrganizationMap,
               linkedTrip,
               currentUserId: user.id,
+              routePlan: buildRoutePlanForOrder({
+                orderId: order.id as string,
+                linkedTrip,
+                orderTripLinksForOrder: linksByOrderId.get(order.id) || [],
+              }),
             })
           ),
           {
@@ -1185,6 +1284,16 @@ export async function GET(req: NextRequest) {
               relatedOrder: firstLinkedOrder,
               sourceOrganizationMap,
               currentUserId: user.id,
+              routePlan:
+                firstLinkedOrder
+                  ? buildRoutePlanForOrder({
+                      orderId: firstLinkedOrder.id as string,
+                      linkedTrip: trip,
+                      orderTripLinksForOrder: (linksByOrderId.get(firstLinkedOrder.id) || []).filter(
+                        (link: any) => link.trip_id === trip.id
+                      ),
+                    })
+                  : null,
             })
           ),
           {
