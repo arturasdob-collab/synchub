@@ -414,15 +414,18 @@ async function loadCargoLegTypesByOrderTripLinkId(
   serviceSupabase: ServiceSupabase,
   orderTripLinkIds: string[]
 ) {
-  const legTypesByOrderTripLinkId = new Map<string, string[]>();
+  const cargoLegsByOrderTripLinkId = new Map<
+    string,
+    Array<{ leg_order: number | null; leg_type: string }>
+  >();
 
   if (orderTripLinkIds.length === 0) {
-    return legTypesByOrderTripLinkId;
+    return cargoLegsByOrderTripLinkId;
   }
 
   const { data, error } = await serviceSupabase
     .from('cargo_legs')
-    .select('order_trip_link_id, leg_type')
+    .select('order_trip_link_id, leg_order, leg_type')
     .in('order_trip_link_id', orderTripLinkIds);
 
   if (error) {
@@ -435,12 +438,18 @@ async function loadCargoLegTypesByOrderTripLinkId(
     }
 
     const key = (row as any).order_trip_link_id as string;
-    const current = legTypesByOrderTripLinkId.get(key) || [];
-    current.push((row as any).leg_type as string);
-    legTypesByOrderTripLinkId.set(key, current);
+    const current = cargoLegsByOrderTripLinkId.get(key) || [];
+    current.push({
+      leg_order:
+        typeof (row as any).leg_order === 'number' && Number.isFinite((row as any).leg_order)
+          ? ((row as any).leg_order as number)
+          : null,
+      leg_type: (row as any).leg_type as string,
+    });
+    cargoLegsByOrderTripLinkId.set(key, current);
   }
 
-  return legTypesByOrderTripLinkId;
+  return cargoLegsByOrderTripLinkId;
 }
 
 function buildOrderRow(params: {
@@ -453,6 +462,8 @@ function buildOrderRow(params: {
   routePlan?: {
     collection_mode: string;
     reloading_mode: string;
+    distribution_mode: string;
+    post_international_reloading_mode: string;
     international_trip_id: string | null;
     international_trip_number: string | null;
     setup_status: string;
@@ -552,6 +563,8 @@ function buildTripRow(params: {
   routePlan?: {
     collection_mode: string;
     reloading_mode: string;
+    distribution_mode: string;
+    post_international_reloading_mode: string;
     international_trip_id: string | null;
     international_trip_number: string | null;
     setup_status: string;
@@ -787,7 +800,7 @@ export async function GET(req: NextRequest) {
       serviceSupabase,
       Array.from(orderMap.keys())
     );
-    const cargoLegTypesByOrderTripLinkId = await loadCargoLegTypesByOrderTripLinkId(
+    const cargoLegPlansByOrderTripLinkId = await loadCargoLegTypesByOrderTripLinkId(
       serviceSupabase,
       orderTripLinks
         .map((link: any) => (typeof link?.id === 'string' ? link.id : ''))
@@ -1064,15 +1077,15 @@ export async function GET(req: NextRequest) {
       orderTripLinksForOrder: any[];
     }) => {
       const storedPlan = workflowRoutePlans.get(params.orderId) || null;
-      const cargoLegTypes = params.orderTripLinksForOrder.flatMap((link: any) =>
-        cargoLegTypesByOrderTripLinkId.get(link.id as string) || []
+      const cargoLegs = params.orderTripLinksForOrder.flatMap((link: any) =>
+        cargoLegPlansByOrderTripLinkId.get(link.id as string) || []
       );
 
       return mergeWorkflowRoutePlan({
         storedPlan,
         derivedPlan: buildDerivedWorkflowRoutePlan({
           linkedTripId: params.linkedTrip?.id ?? null,
-          cargoLegTypes,
+          cargoLegs,
         }),
         linkedTripId: params.linkedTrip?.id ?? null,
         linkedTripNumber: params.linkedTrip?.trip_number ?? null,

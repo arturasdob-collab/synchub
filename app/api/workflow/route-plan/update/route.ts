@@ -10,6 +10,7 @@ import {
 } from '@/lib/server/order-trip-linking';
 import {
   isWorkflowCollectionMode,
+  isWorkflowDistributionMode,
   isWorkflowReloadingMode,
   upsertWorkflowRoutePlan,
 } from '@/lib/server/workflow-route-plans';
@@ -51,6 +52,8 @@ export async function POST(req: Request) {
       : '';
   const collectionMode = body.collection_mode;
   const reloadingMode = body.reloading_mode;
+  const distributionMode = body.distribution_mode;
+  const postInternationalReloadingMode = body.post_international_reloading_mode;
 
   if (!orderId) {
     return NextResponse.json({ error: 'Order id is required' }, { status: 400 });
@@ -62,6 +65,17 @@ export async function POST(req: Request) {
 
   if (!isWorkflowReloadingMode(reloadingMode)) {
     return NextResponse.json({ error: 'Invalid reloading mode' }, { status: 400 });
+  }
+
+  if (!isWorkflowDistributionMode(distributionMode)) {
+    return NextResponse.json({ error: 'Invalid distribution mode' }, { status: 400 });
+  }
+
+  if (!isWorkflowReloadingMode(postInternationalReloadingMode)) {
+    return NextResponse.json(
+      { error: 'Invalid post-international reloading mode' },
+      { status: 400 }
+    );
   }
 
   try {
@@ -94,6 +108,8 @@ export async function POST(req: Request) {
       orderId,
       collectionMode,
       reloadingMode,
+      distributionMode,
+      postInternationalReloadingMode,
       userId: user.id,
     });
 

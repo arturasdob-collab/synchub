@@ -104,6 +104,8 @@ type WorkflowGroup = {
 type WorkflowRoutePlan = {
   collection_mode: 'not_set' | 'direct' | 'collection_trip';
   reloading_mode: 'not_set' | 'no_reloading' | 'reloading';
+  distribution_mode: 'not_set' | 'direct' | 'distribution_trip';
+  post_international_reloading_mode: 'not_set' | 'no_reloading' | 'reloading';
   international_trip_id: string | null;
   international_trip_number: string | null;
   setup_status: 'setup_needed' | 'ready';
@@ -150,6 +152,8 @@ type WorkflowFieldUpdateResponse = {
 type WorkflowRoutePlanUpdateResponse = {
   collection_mode: WorkflowRoutePlan['collection_mode'];
   reloading_mode: WorkflowRoutePlan['reloading_mode'];
+  distribution_mode: WorkflowRoutePlan['distribution_mode'];
+  post_international_reloading_mode: WorkflowRoutePlan['post_international_reloading_mode'];
 };
 
 type OrganizationOption = {
@@ -175,7 +179,11 @@ type WorkflowEditingCell = {
   | {
       edit_kind: 'route_plan';
       order_id: string;
-      plan_key: 'collection_mode' | 'reloading_mode';
+      plan_key:
+        | 'collection_mode'
+        | 'reloading_mode'
+        | 'distribution_mode'
+        | 'post_international_reloading_mode';
     }
 );
 
@@ -191,6 +199,8 @@ type WorkflowFilters = {
   collectionPlan: string;
   reloadingPlan: string;
   internationalPlan: string;
+  distributionPlan: string;
+  reloadingAfterIntlPlan: string;
   company: string;
   contact: string;
   sender: string;
@@ -217,6 +227,8 @@ type WorkflowHeaderFilterId =
   | 'collection_plan'
   | 'reloading_plan'
   | 'international_plan'
+  | 'distribution_plan'
+  | 'reloading_after_international_plan'
   | 'company'
   | 'contact'
   | 'sender'
@@ -251,6 +263,8 @@ const DEFAULT_FILTERS: WorkflowFilters = {
   collectionPlan: '',
   reloadingPlan: '',
   internationalPlan: '',
+  distributionPlan: '',
+  reloadingAfterIntlPlan: '',
   company: '',
   contact: '',
   sender: '',
@@ -285,6 +299,12 @@ const WORKFLOW_RELOADING_MODE_OPTIONS = [
   { value: 'reloading', label: 'Reloading' },
 ] as const;
 
+const WORKFLOW_DISTRIBUTION_MODE_OPTIONS = [
+  { value: 'not_set', label: 'Not set' },
+  { value: 'direct', label: 'Direct' },
+  { value: 'distribution_trip', label: 'Distribution trip' },
+] as const;
+
 const WORKFLOW_COLUMN_CONFIG = [
   { id: 'status', defaultWidth: 84, minWidth: 52 },
   { id: 'prep', defaultWidth: 88, minWidth: 64 },
@@ -294,6 +314,8 @@ const WORKFLOW_COLUMN_CONFIG = [
   { id: 'collection_plan', defaultWidth: 120, minWidth: 76 },
   { id: 'reloading_plan', defaultWidth: 120, minWidth: 76 },
   { id: 'international_plan', defaultWidth: 160, minWidth: 90 },
+  { id: 'distribution_plan', defaultWidth: 132, minWidth: 82 },
+  { id: 'reloading_after_international_plan', defaultWidth: 142, minWidth: 82 },
   { id: 'company', defaultWidth: 170, minWidth: 96 },
   { id: 'contact', defaultWidth: 170, minWidth: 96 },
   { id: 'sender', defaultWidth: 150, minWidth: 96 },
@@ -419,6 +441,20 @@ function formatWorkflowReloadingMode(
   );
 }
 
+function formatWorkflowDistributionMode(
+  value: WorkflowRoutePlan['distribution_mode'] | null | undefined
+) {
+  return (
+    WORKFLOW_DISTRIBUTION_MODE_OPTIONS.find((option) => option.value === value)?.label || '-'
+  );
+}
+
+function formatWorkflowPostInternationalReloadingMode(
+  value: WorkflowRoutePlan['post_international_reloading_mode'] | null | undefined
+) {
+  return formatWorkflowReloadingMode(value);
+}
+
 function formatWorkflowInternationalPlan(routePlan: WorkflowRoutePlan | null | undefined) {
   if (!routePlan) {
     return '-';
@@ -523,6 +559,10 @@ function buildStandaloneSearchText(row: WorkflowStandaloneRow) {
     formatWorkflowCollectionMode(row.route_plan?.collection_mode),
     formatWorkflowReloadingMode(row.route_plan?.reloading_mode),
     formatWorkflowInternationalPlan(row.route_plan),
+    formatWorkflowDistributionMode(row.route_plan?.distribution_mode),
+    formatWorkflowPostInternationalReloadingMode(
+      row.route_plan?.post_international_reloading_mode
+    ),
     row.status,
     formatStatusLabel(row.status),
     row.company_display,
@@ -558,6 +598,9 @@ function buildGroupSearchText(group: WorkflowGroup) {
     group.responsible_display,
     group.vehicle_display,
     group.cost_display,
+    group.rows.length > 0
+      ? formatWorkflowInternationalPlan(group.rows[0]?.route_plan)
+      : '',
   ]
     .filter(Boolean)
     .join(' ')
@@ -567,7 +610,11 @@ function buildGroupSearchText(group: WorkflowGroup) {
 function buildRoutePlanEditingCell(
   rowId: string,
   orderId: string | null | undefined,
-  planKey: 'collection_mode' | 'reloading_mode'
+  planKey:
+    | 'collection_mode'
+    | 'reloading_mode'
+    | 'distribution_mode'
+    | 'post_international_reloading_mode'
 ): WorkflowEditingCell | null {
   if (!orderId) {
     return null;
@@ -769,11 +816,18 @@ function mergeWorkflowRoutePlanForClient(
   return {
     collection_mode: collectionMode,
     reloading_mode: reloadingMode,
+    distribution_mode: update.distribution_mode,
+    post_international_reloading_mode: update.post_international_reloading_mode,
     international_trip_id: internationalTripId,
     international_trip_number: internationalTripNumber,
     setup_status:
       internationalTripId &&
-      (collectionMode === 'not_set' || reloadingMode === 'not_set')
+      (
+        collectionMode === 'not_set' ||
+        reloadingMode === 'not_set' ||
+        update.distribution_mode === 'not_set' ||
+        update.post_international_reloading_mode === 'not_set'
+      )
         ? 'setup_needed'
         : 'ready',
   };
@@ -1261,6 +1315,8 @@ function WorkflowTableHeader({
     collection_plan: renderTextFilter('collection_plan', 'Collection', 'collectionPlan', 'w-36', 'Collection'),
     reloading_plan: renderTextFilter('reloading_plan', 'Reloading', 'reloadingPlan', 'w-36', 'Reloading'),
     international_plan: renderTextFilter('international_plan', 'Intl trip', 'internationalPlan', 'w-40', 'Trip / setup'),
+    distribution_plan: renderTextFilter('distribution_plan', 'Distribution', 'distributionPlan', 'w-40', 'Distribution'),
+    reloading_after_international_plan: renderTextFilter('reloading_after_international_plan', 'Reloading 2', 'reloadingAfterIntlPlan', 'w-40', 'Reloading after intl'),
     company: renderTextFilter('company', 'Company', 'company', 'w-40', 'Company'),
     contact: renderTextFilter('contact', 'Contact', 'contact', 'w-40', 'Contact'),
     sender: renderTextFilter('sender', 'Sender', 'sender', 'w-36', 'Sender'),
@@ -1474,6 +1530,16 @@ function WorkflowStandaloneRowView({
     row.order_id,
     'reloading_mode'
   );
+  const distributionPlanCell = buildRoutePlanEditingCell(
+    row.id,
+    row.order_id,
+    'distribution_mode'
+  );
+  const postInternationalReloadingPlanCell = buildRoutePlanEditingCell(
+    row.id,
+    row.order_id,
+    'post_international_reloading_mode'
+  );
   const statusCell =
     row.row_type === 'trip_row' ? tripFieldCell('status') : orderFieldCell('status');
   const canEditStatus = allowAcknowledge && !!statusCell;
@@ -1611,6 +1677,60 @@ function WorkflowStandaloneRowView({
         ) : (
           <CompactCell value={formatWorkflowInternationalPlan(row.route_plan)} scrollable />
         )}
+      </td>
+    ),
+    distribution_plan: (
+      <td className="px-2 py-1.5 whitespace-nowrap">
+        <WorkflowDisplayCell
+          value={formatWorkflowDistributionMode(row.route_plan?.distribution_mode)}
+          editable={canEditOrderField && !!distributionPlanCell}
+          onStartEdit={
+            canEditOrderField && distributionPlanCell
+              ? () =>
+                  onStartEdit(
+                    distributionPlanCell,
+                    row.route_plan?.distribution_mode || 'not_set'
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(distributionPlanCell)}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
+          selectOptions={WORKFLOW_DISTRIBUTION_MODE_OPTIONS.map((option) => ({
+            value: option.value,
+            label: option.label,
+          }))}
+        />
+      </td>
+    ),
+    reloading_after_international_plan: (
+      <td className="px-2 py-1.5 whitespace-nowrap">
+        <WorkflowDisplayCell
+          value={formatWorkflowPostInternationalReloadingMode(
+            row.route_plan?.post_international_reloading_mode
+          )}
+          editable={canEditOrderField && !!postInternationalReloadingPlanCell}
+          onStartEdit={
+            canEditOrderField && postInternationalReloadingPlanCell
+              ? () =>
+                  onStartEdit(
+                    postInternationalReloadingPlanCell,
+                    row.route_plan?.post_international_reloading_mode || 'not_set'
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(postInternationalReloadingPlanCell)}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
+          selectOptions={WORKFLOW_RELOADING_MODE_OPTIONS.map((option) => ({
+            value: option.value,
+            label: option.label,
+          }))}
+        />
       </td>
     ),
     company: (
@@ -2157,6 +2277,8 @@ function GroupageBlock({
         </button>
       </td>
     ),
+    distribution_plan: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    reloading_after_international_plan: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
     company: (
       <td className="px-2 py-1">
         <CompactCell value={removeCompanyCode(group.carrier_display)} scrollable />
@@ -2269,6 +2391,8 @@ function GroupageBlock({
     collection_plan: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
     reloading_plan: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
     international_plan: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    distribution_plan: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    reloading_after_international_plan: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
     company: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
     contact: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
     sender: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
@@ -3100,6 +3224,14 @@ export default function WorkflowPage() {
                 editingCell.plan_key === 'reloading_mode'
                   ? editingValue
                   : currentRoutePlan?.reloading_mode || 'not_set';
+              const nextDistributionMode =
+                editingCell.plan_key === 'distribution_mode'
+                  ? editingValue
+                  : currentRoutePlan?.distribution_mode || 'not_set';
+              const nextPostInternationalReloadingMode =
+                editingCell.plan_key === 'post_international_reloading_mode'
+                  ? editingValue
+                  : currentRoutePlan?.post_international_reloading_mode || 'not_set';
 
               return fetch('/api/workflow/route-plan/update', {
                 method: 'POST',
@@ -3110,6 +3242,8 @@ export default function WorkflowPage() {
                   order_id: editingCell.order_id,
                   collection_mode: nextCollectionMode,
                   reloading_mode: nextReloadingMode,
+                  distribution_mode: nextDistributionMode,
+                  post_international_reloading_mode: nextPostInternationalReloadingMode,
                 }),
               });
             })();
@@ -3357,6 +3491,16 @@ export default function WorkflowPage() {
           formatWorkflowInternationalPlan(row.route_plan),
           filters.internationalPlan
         ) &&
+        matchesText(
+          formatWorkflowDistributionMode(row.route_plan?.distribution_mode),
+          filters.distributionPlan
+        ) &&
+        matchesText(
+          formatWorkflowPostInternationalReloadingMode(
+            row.route_plan?.post_international_reloading_mode
+          ),
+          filters.reloadingAfterIntlPlan
+        ) &&
         matchesText(removeCompanyCode(row.company_display), filters.company) &&
         matchesText(row.contact_display, filters.contact) &&
         matchesText(row.shipper_name, filters.sender) &&
@@ -3405,6 +3549,8 @@ export default function WorkflowPage() {
         !filters.collectionPlan.trim() &&
         !filters.reloadingPlan.trim() &&
         matchesText(group.trip_number, filters.internationalPlan) &&
+        !filters.distributionPlan.trim() &&
+        !filters.reloadingAfterIntlPlan.trim() &&
         matchesText(removeCompanyCode(group.carrier_display), filters.company) &&
         matchesText(group.responsible_display, filters.contact) &&
         !filters.sender.trim() &&
