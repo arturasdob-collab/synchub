@@ -9,6 +9,7 @@ import {
 } from '@/lib/server/order-trip-linking';
 import { canAccessOrderViaCargoRoute } from '@/lib/server/cargo-legs';
 import { loadWorkflowFieldUpdates } from '@/lib/server/workflow-field-updates';
+import { loadWorkflowRoutePlans } from '@/lib/server/workflow-route-plans';
 
 function parseWorkflowNumericValue(value: string | null | undefined) {
   if (!value) {
@@ -187,6 +188,8 @@ export async function GET(req: NextRequest) {
     }
 
     const sourceOrganizationData = sourceOrganization.data;
+    const workflowRoutePlans = await loadWorkflowRoutePlans(serviceSupabase, [orderId]);
+    const storedRoutePlan = workflowRoutePlans.get(orderId) || null;
     const createdByName =
       `${createdByUser?.first_name || ''} ${createdByUser?.last_name || ''}`.trim() || null;
     const createdByContact = [createdByUser?.phone, createdByUser?.email]
@@ -246,6 +249,18 @@ export async function GET(req: NextRequest) {
             last_name: createdByUser.last_name ?? null,
             phone: createdByUser.phone ?? null,
             email: createdByUser.email ?? null,
+          }
+        : null,
+      route_plan: storedRoutePlan
+        ? {
+            collection_mode: storedRoutePlan.collection_mode,
+            reloading_mode: storedRoutePlan.reloading_mode,
+            distribution_mode: storedRoutePlan.distribution_mode,
+            post_international_reloading_mode:
+              storedRoutePlan.post_international_reloading_mode,
+            international_trip_id: null,
+            international_trip_number: null,
+            setup_status: 'ready',
           }
         : null,
     };
