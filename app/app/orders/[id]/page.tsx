@@ -216,11 +216,18 @@ type CargoLegRow = {
 type LinkedTripRow = {
   link_id: string;
   trip_id: string;
+  organization_id: string | null;
   trip_number: string;
   status: string | null;
+  is_groupage: boolean | null;
   driver_name: string | null;
   truck_plate: string | null;
   trailer_plate: string | null;
+  created_by: string | null;
+  created_by_user: {
+    first_name: string | null;
+    last_name: string | null;
+  } | null;
   created_at: string | null;
   carrier: {
     name: string | null;
@@ -238,6 +245,13 @@ type OrderRoutePlan = {
   international_trip_number: string | null;
   setup_status: 'setup_needed' | 'ready';
 };
+
+type OrderRoutePlanStepKey =
+  | 'collection'
+  | 'reloading_before'
+  | 'international'
+  | 'reloading_after'
+  | 'distribution';
 
 type AvailableTripRow = {
   id: string;
@@ -586,6 +600,92 @@ function getNextCargoLegOrder(cargoLegs: CargoLegRow[]) {
   return Math.max(...cargoLegs.map((cargoLeg) => cargoLeg.leg_order)) + 1;
 }
 
+function getCargoLegTypeForOrderRoutePlanStep(stepKey: OrderRoutePlanStepKey): CargoLegType {
+  switch (stepKey) {
+    case 'collection':
+      return 'collection';
+    case 'reloading_before':
+    case 'reloading_after':
+      return 'reloading';
+    case 'distribution':
+      return 'delivery';
+    case 'international':
+    default:
+      return 'international_trip';
+  }
+}
+
+function getSuggestedCargoLegOrderForPlanStep(
+  stepKey: OrderRoutePlanStepKey,
+  cargoLegs: CargoLegRow[]
+) {
+  const sortedLegs = [...cargoLegs].sort((left, right) => left.leg_order - right.leg_order);
+
+  if (sortedLegs.length === 0) {
+    return 1;
+  }
+
+  const findFirstOrder = (matcher: (cargoLeg: CargoLegRow, index: number) => boolean) => {
+    const matchedLeg = sortedLegs.find(matcher);
+    return matchedLeg?.leg_order ?? null;
+  };
+
+  const findLastOrder = (matcher: (cargoLeg: CargoLegRow, index: number) => boolean) => {
+    const matchedLegs = sortedLegs.filter(matcher);
+    return matchedLegs.length > 0 ? matchedLegs[matchedLegs.length - 1].leg_order : null;
+  };
+
+  const firstInternationalOrder = findFirstOrder(
+    (cargoLeg) => cargoLeg.leg_type === 'international_trip'
+  );
+  const firstDeliveryOrder = findFirstOrder((cargoLeg) => cargoLeg.leg_type === 'delivery');
+  const lastPreInternationalOrder = findLastOrder(
+    (cargoLeg) =>
+      cargoLeg.leg_type === 'collection' || cargoLeg.leg_type === 'reloading'
+  );
+  const lastInternationalOrder = findLastOrder(
+    (cargoLeg) => cargoLeg.leg_type === 'international_trip'
+  );
+  const lastNonDeliveryOrder = findLastOrder((cargoLeg) => cargoLeg.leg_type !== 'delivery');
+
+  switch (stepKey) {
+    case 'collection':
+      return 1;
+    case 'reloading_before':
+      return (
+        firstInternationalOrder ??
+        firstDeliveryOrder ??
+        ((lastPreInternationalOrder ?? 0) + 1)
+      );
+    case 'international':
+      return firstDeliveryOrder ?? ((lastPreInternationalOrder ?? 0) + 1);
+    case 'reloading_after':
+      return (
+        firstDeliveryOrder ??
+        ((lastInternationalOrder ?? lastPreInternationalOrder ?? 0) + 1)
+      );
+    case 'distribution':
+      return (lastNonDeliveryOrder ?? 0) + 1;
+    default:
+      return getNextCargoLegOrder(sortedLegs);
+  }
+}
+
+function mapLinkedTripToRouteTripOption(linkedTrip: LinkedTripRow): RouteTripOption {
+  return {
+    id: linkedTrip.trip_id,
+    trip_number: linkedTrip.trip_number,
+    status: linkedTrip.status,
+    driver_name: linkedTrip.driver_name,
+    truck_plate: linkedTrip.truck_plate,
+    trailer_plate: linkedTrip.trailer_plate,
+    is_groupage: linkedTrip.is_groupage,
+    created_by: linkedTrip.created_by,
+    created_by_user: linkedTrip.created_by_user,
+    carrier: linkedTrip.carrier,
+  };
+}
+
 function formatOrderRouteCollectionMode(
   value: OrderRoutePlan['collection_mode'] | null | undefined
 ) {
@@ -723,7 +823,7 @@ function buildOrderRoutePlanSteps(plan: OrderRoutePlan, cargoLegs: CargoLegRow[]
 
   return [
     {
-      key: 'collection',
+      key: 'collection' as const,
       label: 'Collection',
       value: formatOrderRouteCollectionMode(plan.collection_mode),
       planned: plan.collection_mode !== 'not_set',
@@ -733,7 +833,7 @@ function buildOrderRoutePlanSteps(plan: OrderRoutePlan, cargoLegs: CargoLegRow[]
           : plan.collection_mode === 'direct',
     },
     {
-      key: 'reloading_before',
+      key: 'reloading_before' as const,
       label: 'Reloading',
       value: formatOrderRouteReloadingMode(plan.reloading_mode),
       planned: plan.reloading_mode !== 'not_set',
@@ -743,14 +843,14 @@ function buildOrderRoutePlanSteps(plan: OrderRoutePlan, cargoLegs: CargoLegRow[]
           : plan.reloading_mode === 'no_reloading',
     },
     {
-      key: 'international',
+      key: 'international' as const,
       label: 'International',
       value: plan.international_trip_number || 'Not set',
       planned: true,
       complete: hasInternational,
     },
     {
-      key: 'reloading_after',
+      key: 'reloading_after' as const,
       label: 'Reloading 2',
       value: formatOrderRouteReloadingMode(plan.post_international_reloading_mode),
       planned: plan.post_international_reloading_mode !== 'not_set',
@@ -760,7 +860,7 @@ function buildOrderRoutePlanSteps(plan: OrderRoutePlan, cargoLegs: CargoLegRow[]
           : plan.post_international_reloading_mode === 'no_reloading',
     },
     {
-      key: 'distribution',
+      key: 'distribution' as const,
       label: 'Distribution',
       value: formatOrderRouteDistributionMode(plan.distribution_mode),
       planned: plan.distribution_mode !== 'not_set',
@@ -1760,15 +1860,24 @@ export default function OrderPage() {
     });
   };
 
-  const openNewCargoLegEditor = (linkedTrip: LinkedTripRow) => {
+  const openNewCargoLegEditor = (
+    linkedTrip: LinkedTripRow,
+    requestedStepKey?: OrderRoutePlanStepKey
+  ) => {
     const effectiveRoutePlan = mergeOrderRoutePlan(order?.route_plan, linkedTrip);
-    const suggestedLegType = getSuggestedCargoLegTypeForPlan(
-      effectiveRoutePlan,
-      linkedTrip.cargo_legs || []
-    );
+    const suggestedLegType = requestedStepKey
+      ? getCargoLegTypeForOrderRoutePlanStep(requestedStepKey)
+      : getSuggestedCargoLegTypeForPlan(effectiveRoutePlan, linkedTrip.cargo_legs || []);
+    const suggestedLegOrder = requestedStepKey
+      ? getSuggestedCargoLegOrderForPlanStep(requestedStepKey, linkedTrip.cargo_legs || [])
+      : getNextCargoLegOrder(linkedTrip.cargo_legs || []);
+    const shouldUseLinkedTripAsMatchedTrip = suggestedLegType === 'international_trip';
+
     setCargoLegEditorLinkId(linkedTrip.link_id);
     setEditingCargoLegId(null);
-    setMatchedCargoLegTrip(null);
+    setMatchedCargoLegTrip(
+      shouldUseLinkedTripAsMatchedTrip ? mapLinkedTripToRouteTripOption(linkedTrip) : null
+    );
     setCargoLegLookupMessage('');
     setCargoLegLookupLoading(false);
     setCargoLegOrganizationSearch('');
@@ -1778,13 +1887,17 @@ export default function OrderPage() {
     setCargoLegManagerSearch('');
     setShowCargoLegManagerDropdown(false);
     setCargoLegForm({
-      leg_order: String(getNextCargoLegOrder(linkedTrip.cargo_legs || [])),
+      leg_order: String(suggestedLegOrder),
       leg_type: suggestedLegType,
-      responsible_organization_id: currentSharedOrganizationId || form.shared_organization_id || '',
+      responsible_organization_id:
+        (shouldUseLinkedTripAsMatchedTrip ? linkedTrip.organization_id : null) ||
+        currentSharedOrganizationId ||
+        form.shared_organization_id ||
+        '',
       responsible_warehouse_id: '',
       manager_user_ids: [],
       show_to_all_managers: false,
-      linked_trip_number: suggestedLegType === 'international_trip' ? linkedTrip.trip_number : '',
+      linked_trip_number: shouldUseLinkedTripAsMatchedTrip ? linkedTrip.trip_number : '',
     });
   };
 
@@ -1823,6 +1936,14 @@ export default function OrderPage() {
       linkedTrip.cargo_legs || []
     );
     const missingSteps = planSteps.filter((step) => step.planned && !step.complete);
+    const actionableMissingSteps = missingSteps.filter(
+      (step) =>
+        step.key === 'collection' ||
+        step.key === 'reloading_before' ||
+        step.key === 'international' ||
+        step.key === 'reloading_after' ||
+        step.key === 'distribution'
+    );
     const suggestedLegType = getSuggestedCargoLegTypeForPlan(
       effectiveRoutePlan,
       linkedTrip.cargo_legs || []
@@ -1862,9 +1983,25 @@ export default function OrderPage() {
         </div>
 
         {missingSteps.length > 0 ? (
-          <div className="mt-2 text-xs text-amber-800">
-            Missing route steps: {missingSteps.map((step) => step.label).join(' -> ')}
-          </div>
+          <>
+            <div className="mt-2 text-xs text-amber-800">
+              Missing route steps: {missingSteps.map((step) => step.label).join(' -> ')}
+            </div>
+            {actionableMissingSteps.length > 0 ? (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {actionableMissingSteps.map((step) => (
+                  <button
+                    key={`${linkedTrip.link_id}-${step.key}-action`}
+                    type="button"
+                    onClick={() => openNewCargoLegEditor(linkedTrip, step.key)}
+                    className="rounded-md border border-amber-200 bg-white px-2.5 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                  >
+                    Add {step.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </>
         ) : (
           <div className="mt-2 text-xs text-emerald-700">
             Planned route steps are already present in this trip flow.

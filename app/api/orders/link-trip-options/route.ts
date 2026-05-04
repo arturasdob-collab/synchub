@@ -104,11 +104,18 @@ export async function GET(req: NextRequest) {
           trip_id,
           trip:trip_id (
             id,
+            organization_id,
             trip_number,
             status,
+            is_groupage,
             driver_name,
             truck_plate,
             trailer_plate,
+            created_by,
+            created_by_user:created_by (
+              first_name,
+              last_name
+            ),
             created_at,
             carrier:carrier_company_id (
               name,
@@ -175,17 +182,31 @@ export async function GET(req: NextRequest) {
     const linkedTrips = (linkedRowsResponse.data || [])
       .map((row: any) => {
         const trip = Array.isArray(row.trip) ? row.trip[0] ?? null : row.trip;
+        const createdByUser = trip
+          ? Array.isArray(trip.created_by_user)
+            ? trip.created_by_user[0] ?? null
+            : trip.created_by_user
+          : null;
 
         if (!trip) return null;
 
         return {
           link_id: row.id,
           trip_id: row.trip_id,
+          organization_id: trip.organization_id ?? null,
           trip_number: trip.trip_number,
           status: trip.status,
+          is_groupage: trip.is_groupage ?? null,
           driver_name: trip.driver_name ?? null,
           truck_plate: trip.truck_plate ?? null,
           trailer_plate: trip.trailer_plate ?? null,
+          created_by: trip.created_by ?? null,
+          created_by_user: createdByUser
+            ? {
+                first_name: createdByUser.first_name ?? null,
+                last_name: createdByUser.last_name ?? null,
+              }
+            : null,
           created_at: trip.created_at ?? null,
           carrier: trip.carrier
             ? {
