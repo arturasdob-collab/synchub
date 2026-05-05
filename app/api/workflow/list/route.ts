@@ -1152,7 +1152,7 @@ export async function GET(req: NextRequest) {
               sourceOrganizationMap,
               linkedTrip: trip,
               currentUserId: user.id,
-              visibilityMode: visibleOrderAccess.get(order.id as string) || 'full',
+              visibilityMode: 'full',
               kind: 'Groupage cargo',
               routePlan: buildRoutePlanForOrder({
                 orderId: order.id as string,
@@ -1279,6 +1279,10 @@ export async function GET(req: NextRequest) {
           return false;
         }
 
+        if (linkedTrip.created_by === effectiveManagerUserId) {
+          return false;
+        }
+
         if (order.created_by === effectiveManagerUserId) {
           return true;
         }
@@ -1343,7 +1347,10 @@ export async function GET(req: NextRequest) {
             ? trip.groupage_responsible_manager_id
             : null) || trip.created_by || null;
 
-        return groupageOwnerUserId !== effectiveManagerUserId;
+        return (
+          groupageOwnerUserId !== effectiveManagerUserId &&
+          trip.created_by === effectiveManagerUserId
+        );
       })
       .filter((trip: any) => {
         if (trip.is_groupage) {
