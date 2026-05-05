@@ -48,6 +48,8 @@ const orderSelect = `
   client_order_number,
   status,
   loading_date,
+  loading_time_from,
+  loading_time_to,
   loading_address,
   loading_city,
   loading_postal_code,
@@ -55,6 +57,8 @@ const orderSelect = `
   loading_reference,
   loading_customs_info,
   unloading_date,
+  unloading_time_from,
+  unloading_time_to,
   unloading_address,
   unloading_city,
   unloading_postal_code,
@@ -129,6 +133,35 @@ function formatExtraInfo(parts: Array<string | null | undefined>) {
     .filter((value) => value !== '');
 
   return normalized.length > 0 ? normalized.join(' / ') : '-';
+}
+
+function formatScheduleSummary(params: {
+  date: string | null | undefined;
+  timeFrom: string | null | undefined;
+  timeTo: string | null | undefined;
+}) {
+  const date = typeof params.date === 'string' ? params.date.trim() : '';
+  const timeFrom =
+    typeof params.timeFrom === 'string' ? params.timeFrom.trim() : '';
+  const timeTo = typeof params.timeTo === 'string' ? params.timeTo.trim() : '';
+
+  if (!date) {
+    return '-';
+  }
+
+  if (timeFrom && timeTo) {
+    return `${date} ${timeFrom}-${timeTo}`;
+  }
+
+  if (timeFrom) {
+    return `${date} ${timeFrom}`;
+  }
+
+  if (timeTo) {
+    return `${date} -${timeTo}`;
+  }
+
+  return date;
 }
 
 function formatPerson(
@@ -521,7 +554,17 @@ function buildOrderRow(params: {
     trip_id: linkedTrip?.id ?? null,
     status: order.status ?? null,
     prep_date: order.loading_date ?? null,
+    prep_display: formatScheduleSummary({
+      date: order.loading_date,
+      timeFrom: order.loading_time_from,
+      timeTo: order.loading_time_to,
+    }),
     delivery_date: order.unloading_date ?? null,
+    delivery_display: formatScheduleSummary({
+      date: order.unloading_date,
+      timeFrom: order.unloading_time_from,
+      timeTo: order.unloading_time_to,
+    }),
     record_number: order.internal_order_number ?? '-',
     client_order_number: order.client_order_number ?? null,
     kind: params.kind || 'Order',
@@ -614,7 +657,17 @@ function buildTripRow(params: {
     trip_id: trip.id,
     status: trip.status ?? null,
     prep_date: relatedOrder?.loading_date ?? null,
+    prep_display: formatScheduleSummary({
+      date: relatedOrder?.loading_date ?? null,
+      timeFrom: relatedOrder?.loading_time_from ?? null,
+      timeTo: relatedOrder?.loading_time_to ?? null,
+    }),
     delivery_date: relatedOrder?.unloading_date ?? null,
+    delivery_display: formatScheduleSummary({
+      date: relatedOrder?.unloading_date ?? null,
+      timeFrom: relatedOrder?.unloading_time_from ?? null,
+      timeTo: relatedOrder?.unloading_time_to ?? null,
+    }),
     record_number: trip.trip_number ?? '-',
     client_order_number: relatedOrder?.client_order_number ?? null,
     kind: trip.is_groupage ? 'Groupage' : 'Trip',

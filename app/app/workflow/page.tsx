@@ -35,7 +35,9 @@ type WorkflowStandaloneRow = {
   trip_id: string | null;
   status: string | null;
   prep_date: string | null;
+  prep_display?: string | null;
   delivery_date: string | null;
+  delivery_display?: string | null;
   record_number: string;
   client_order_number?: string | null;
   kind: string;
@@ -1572,12 +1574,12 @@ function WorkflowStandaloneRowView({
     ),
     prep: (
       <td className="px-2 py-1.5 whitespace-nowrap">
-        <CompactCell value={row.prep_date || '-'} />
+        <CompactCell value={row.prep_display || row.prep_date || '-'} />
       </td>
     ),
     delivery: (
       <td className="px-2 py-1.5 whitespace-nowrap">
-        <CompactCell value={row.delivery_date || '-'} />
+        <CompactCell value={row.delivery_display || row.delivery_date || '-'} />
       </td>
     ),
     record_number: (
