@@ -38,6 +38,8 @@ type WorkflowFieldState = {
   has_override: boolean;
 };
 
+type WorkflowVisibilityMode = 'full' | 'route';
+
 const orderSelect = `
   id,
   organization_id,
@@ -88,6 +90,7 @@ const tripSelect = `
   trip_number,
   status,
   is_groupage,
+  groupage_responsible_manager_id,
   truck_plate,
   trailer_plate,
   driver_name,
@@ -238,7 +241,7 @@ function buildWorkflowFieldState(params: {
   } satisfies WorkflowFieldState;
 }
 
-async function loadVisibleOrderIdsForManager(
+async function loadVisibleOrderAccessForManager(
   serviceSupabase: ServiceSupabase,
   managerUserId: string,
   organizationId: string
@@ -260,17 +263,17 @@ async function loadVisibleOrderIdsForManager(
     );
   }
 
-  const ids = new Set<string>();
+  const accessById = new Map<string, WorkflowVisibilityMode>();
 
   for (const row of createdOrdersResponse.data || []) {
     if ((row as any).id) {
-      ids.add((row as any).id);
+      accessById.set((row as any).id, 'full');
     }
   }
 
   for (const row of sharedOrdersResponse.data || []) {
     if ((row as any).order_id) {
-      ids.add((row as any).order_id);
+      accessById.set((row as any).order_id, 'full');
     }
   }
 
@@ -281,13 +284,15 @@ async function loadVisibleOrderIdsForManager(
   );
 
   for (const id of cargoVisibleOrderIds) {
-    ids.add(id);
+    if (!accessById.has(id)) {
+      accessById.set(id, 'route');
+    }
   }
 
-  return Array.from(ids);
+  return accessById;
 }
 
-async function loadVisibleTripIdsForManager(
+async function loadVisibleTripAccessForManager(
   serviceSupabase: ServiceSupabase,
   managerUserId: string,
   organizationId: string
@@ -309,17 +314,17 @@ async function loadVisibleTripIdsForManager(
     );
   }
 
-  const ids = new Set<string>();
+  const accessById = new Map<string, WorkflowVisibilityMode>();
 
   for (const row of createdTripsResponse.data || []) {
     if ((row as any).id) {
-      ids.add((row as any).id);
+      accessById.set((row as any).id, 'full');
     }
   }
 
   for (const row of sharedTripsResponse.data || []) {
     if ((row as any).trip_id) {
-      ids.add((row as any).trip_id);
+      accessById.set((row as any).trip_id, 'full');
     }
   }
 
@@ -330,10 +335,12 @@ async function loadVisibleTripIdsForManager(
   );
 
   for (const id of cargoVisibleTripIds) {
-    ids.add(id);
+    if (!accessById.has(id)) {
+      accessById.set(id, 'route');
+    }
   }
 
-  return Array.from(ids);
+  return accessById;
 }
 
 async function loadOrdersByIds(serviceSupabase: ServiceSupabase, orderIds: string[]) {
@@ -458,6 +465,7 @@ function buildOrderRow(params: {
   sourceOrganizationMap: Map<string, { name: string | null }>;
   linkedTrip: any | null;
   currentUserId: string;
+  visibilityMode?: WorkflowVisibilityMode;
   kind?: 'Order' | 'Groupage cargo';
   routePlan?: {
     collection_mode: string;
@@ -480,17 +488,23 @@ function buildOrderRow(params: {
   const createdByUser = Array.isArray(order.created_by_user)
     ? order.created_by_user[0] ?? null
     : order.created_by_user;
-  const sameOrganization = order.organization_id === effectiveOrganizationId;
+  const fullVisibility = params.visibilityMode !== 'route';
+  const sameOrganization =
+    fullVisibility && order.organization_id === effectiveOrganizationId;
   const sourceOrganization = order.organization_id
     ? sourceOrganizationMap.get(order.organization_id) ?? null
     : null;
   const companyDisplay = sameOrganization
     ? formatCompanyDisplayName(client)
-    : sourceOrganization?.name || '-';
+    : fullVisibility
+      ? sourceOrganization?.name || '-'
+      : '-';
   const contactDisplay = sameOrganization
     ? formatExtraInfo([order.received_from_name, order.received_from_contact])
-    : formatPerson(createdByUser);
-  const revenueValue = sameOrganization ? order.price ?? null : null;
+    : fullVisibility
+      ? formatPerson(createdByUser)
+      : '-';
+  const revenueValue = sameOrganization && fullVisibility ? order.price ?? null : null;
   const costValue =
     linkedTrip &&
     !linkedTrip.is_groupage &&
@@ -551,6 +565,7 @@ function buildOrderRow(params: {
     trip_editable_by_current_user:
       !!linkedTrip?.id && linkedTrip?.created_by === currentUserId,
     route_plan: params.routePlan ?? null,
+    visibility_mode: params.visibilityMode ?? 'full',
   };
 }
 
@@ -738,18 +753,21 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const [visibleOrderIds, visibleTripIds] = await Promise.all([
-      loadVisibleOrderIdsForManager(
+    const [visibleOrderAccess, visibleTripAccess] = await Promise.all([
+      loadVisibleOrderAccessForManager(
         serviceSupabase,
         effectiveManagerUserId,
         effectiveOrganizationId
       ),
-      loadVisibleTripIdsForManager(
+      loadVisibleTripAccessForManager(
         serviceSupabase,
         effectiveManagerUserId,
         effectiveOrganizationId
       ),
     ]);
+
+    const visibleOrderIds = Array.from(visibleOrderAccess.keys());
+    const visibleTripIds = Array.from(visibleTripAccess.keys());
 
     const visibleOrderIdSet = new Set(visibleOrderIds);
     const visibleTripIdSet = new Set(visibleTripIds);
@@ -1101,6 +1119,16 @@ export async function GET(req: NextRequest) {
 
     const ordersInGroupageSet = new Set<string>();
     const groupageGroups = groupageTrips.map((trip: any) => {
+      const groupageOwnerUserId =
+        (typeof trip.groupage_responsible_manager_id === 'string' &&
+        trip.groupage_responsible_manager_id.trim() !== ''
+          ? trip.groupage_responsible_manager_id
+          : null) || trip.created_by || null;
+
+      if (groupageOwnerUserId !== effectiveManagerUserId) {
+        return null;
+      }
+
       const childLinks = linksByTripId.get(trip.id) || [];
       const childOrders = childLinks
         .map((link: any) => orderMap.get(link.order_id))
@@ -1124,6 +1152,7 @@ export async function GET(req: NextRequest) {
               sourceOrganizationMap,
               linkedTrip: trip,
               currentUserId: user.id,
+              visibilityMode: visibleOrderAccess.get(order.id as string) || 'full',
               kind: 'Groupage cargo',
               routePlan: buildRoutePlanForOrder({
                 orderId: order.id as string,
@@ -1224,13 +1253,38 @@ export async function GET(req: NextRequest) {
           },
         },
       };
-    });
+    }).filter(Boolean);
 
     const standaloneRows: any[] = [];
 
     const standaloneOrders = Array.from(visibleOrderIdSet)
       .map((orderId) => orderMap.get(orderId))
       .filter(Boolean)
+      .filter((order: any) => {
+        const linkedTrip = (linksByOrderId.get(order.id) || [])
+          .map((link: any) => tripMap.get(link.trip_id))
+          .find(Boolean) || null;
+
+        if (!linkedTrip?.is_groupage) {
+          return true;
+        }
+
+        const groupageOwnerUserId =
+          (typeof linkedTrip.groupage_responsible_manager_id === 'string' &&
+          linkedTrip.groupage_responsible_manager_id.trim() !== ''
+            ? linkedTrip.groupage_responsible_manager_id
+            : null) || linkedTrip.created_by || null;
+
+        if (groupageOwnerUserId === effectiveManagerUserId) {
+          return false;
+        }
+
+        if (order.created_by === effectiveManagerUserId) {
+          return true;
+        }
+
+        return (visibleOrderAccess.get(order.id as string) || 'full') === 'route';
+      })
       .filter((order: any) => !ordersInGroupageSet.has(order.id))
       .sort((left: any, right: any) =>
         String(left.internal_order_number || '').localeCompare(
@@ -1258,6 +1312,7 @@ export async function GET(req: NextRequest) {
               sourceOrganizationMap,
               linkedTrip,
               currentUserId: user.id,
+              visibilityMode: visibleOrderAccess.get(order.id as string) || 'full',
               routePlan: buildRoutePlanForOrder({
                 orderId: order.id as string,
                 linkedTrip,
@@ -1277,8 +1332,26 @@ export async function GET(req: NextRequest) {
     const standaloneTrips = Array.from(visibleTripIdSet)
       .map((tripId) => tripMap.get(tripId))
       .filter(Boolean)
-      .filter((trip: any) => !trip.is_groupage)
-      .filter((trip: any) => !representedTripIds.has(trip.id))
+      .filter((trip: any) => {
+        if (!trip.is_groupage) {
+          return true;
+        }
+
+        const groupageOwnerUserId =
+          (typeof trip.groupage_responsible_manager_id === 'string' &&
+          trip.groupage_responsible_manager_id.trim() !== ''
+            ? trip.groupage_responsible_manager_id
+            : null) || trip.created_by || null;
+
+        return groupageOwnerUserId !== effectiveManagerUserId;
+      })
+      .filter((trip: any) => {
+        if (trip.is_groupage) {
+          return true;
+        }
+
+        return !representedTripIds.has(trip.id);
+      })
       .sort((left: any, right: any) =>
         String(left.trip_number || '').localeCompare(String(right.trip_number || ''))
       );
@@ -1287,6 +1360,7 @@ export async function GET(req: NextRequest) {
       const firstLinkedOrder = (linksByTripId.get(trip.id) || [])
         .map((link: any) => orderMap.get(link.order_id))
         .find(Boolean) || null;
+      const relatedOrder = trip.is_groupage ? null : firstLinkedOrder;
 
       standaloneRows.push(
         applyTripWorkflowStatesToRow(
@@ -1294,15 +1368,15 @@ export async function GET(req: NextRequest) {
             buildTripRow({
               trip,
               effectiveOrganizationId,
-              relatedOrder: firstLinkedOrder,
+              relatedOrder,
               sourceOrganizationMap,
               currentUserId: user.id,
               routePlan:
-                firstLinkedOrder
+                relatedOrder
                   ? buildRoutePlanForOrder({
-                      orderId: firstLinkedOrder.id as string,
+                      orderId: relatedOrder.id as string,
                       linkedTrip: trip,
-                      orderTripLinksForOrder: (linksByOrderId.get(firstLinkedOrder.id) || []).filter(
+                      orderTripLinksForOrder: (linksByOrderId.get(relatedOrder.id) || []).filter(
                         (link: any) => link.trip_id === trip.id
                       ),
                     })
