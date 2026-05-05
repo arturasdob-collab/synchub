@@ -51,6 +51,7 @@ export async function POST(req: Request) {
   const formData = await req.formData();
   const orderId = normalizeText(formData.get('order_id'));
   const requestedZone = normalizeText(formData.get('document_zone'));
+  const importId = normalizeText(formData.get('import_id'));
   const fileEntry = formData.get('file');
   const skipOrderImport = normalizeText(formData.get('skip_order_import')) === '1';
 
@@ -58,8 +59,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Order id is required' }, { status: 400 });
   }
 
-  if (!(fileEntry instanceof File)) {
-    return NextResponse.json({ error: 'File is required' }, { status: 400 });
+  if (!(fileEntry instanceof File) && !importId) {
+    return NextResponse.json(
+      { error: 'File or import id is required' },
+      { status: 400 }
+    );
   }
 
   try {
@@ -86,10 +90,56 @@ export async function POST(req: Request) {
       );
     }
 
+    let sourceFileName = '';
+    let sourceMimeType = '';
+    let sourceFileSize = 0;
+    let fileBuffer: Buffer;
+    let sourceImportId: string | null = null;
+
+    if (fileEntry instanceof File) {
+      sourceFileName = fileEntry.name;
+      sourceMimeType = fileEntry.type;
+      sourceFileSize = fileEntry.size;
+      fileBuffer = Buffer.from(await fileEntry.arrayBuffer());
+    } else {
+      const { data: orderImport, error: orderImportError } = await serviceSupabase
+        .from('order_imports')
+        .select(
+          'id, organization_id, source_file_name, source_mime_type, source_storage_path'
+        )
+        .eq('id', importId)
+        .single();
+
+      if (orderImportError || !orderImport?.source_storage_path) {
+        return NextResponse.json({ error: 'Order import not found' }, { status: 404 });
+      }
+
+      if (orderImport.organization_id !== profile.organization_id) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
+
+      const { data: importFile, error: importFileError } = await serviceSupabase.storage
+        .from(ORDER_DOCUMENTS_BUCKET)
+        .download(orderImport.source_storage_path);
+
+      if (importFileError || !importFile) {
+        return NextResponse.json(
+          { error: importFileError?.message || 'Failed to load import file' },
+          { status: 500 }
+        );
+      }
+
+      sourceImportId = orderImport.id;
+      sourceFileName = orderImport.source_file_name || 'document';
+      sourceMimeType = orderImport.source_mime_type || '';
+      sourceFileSize = importFile.size;
+      fileBuffer = Buffer.from(await importFile.arrayBuffer());
+    }
+
     const validationError = validateOrderDocumentFile({
-      fileName: fileEntry.name,
-      mimeType: fileEntry.type,
-      fileSize: fileEntry.size,
+      fileName: sourceFileName,
+      mimeType: sourceMimeType,
+      fileSize: sourceFileSize,
     });
 
     if (validationError) {
@@ -98,18 +148,16 @@ export async function POST(req: Request) {
 
     const documentId = crypto.randomUUID();
     const mimeType = normalizeOrderDocumentMimeType(
-      fileEntry.name,
-      fileEntry.type
+      sourceFileName,
+      sourceMimeType
     )!;
     const storagePath = buildOrderDocumentStoragePath({
       sourceOrganizationId: order.organization_id,
       uploadedByOrganizationId: profile.organization_id!,
       orderId: order.id,
       documentId,
-      fileName: fileEntry.name,
+      fileName: sourceFileName,
     });
-
-    const fileBuffer = Buffer.from(await fileEntry.arrayBuffer());
 
     const { error: uploadError } = await serviceSupabase.storage
       .from(ORDER_DOCUMENTS_BUCKET)
@@ -131,9 +179,9 @@ export async function POST(req: Request) {
         order_id: order.id,
         storage_bucket: ORDER_DOCUMENTS_BUCKET,
         storage_path: storagePath,
-        original_file_name: fileEntry.name,
+        original_file_name: sourceFileName,
         mime_type: mimeType,
-        file_size: fileEntry.size,
+        file_size: sourceFileSize,
         document_zone: documentZone,
         created_by: user.id,
       })
@@ -151,12 +199,13 @@ export async function POST(req: Request) {
       const orderImport = skipOrderImport
         || documentZone !== 'order'
         || !canManageAll
+        || sourceImportId
         ? null
         : await createOrderImportRecord(serviceSupabase, {
             organizationId: order.organization_id,
             userId: user.id,
             sourceDocumentId: data.id,
-            sourceFileName: fileEntry.name,
+            sourceFileName,
             sourceMimeType: mimeType,
             sourceStoragePath: storagePath,
             status: 'uploaded',

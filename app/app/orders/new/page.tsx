@@ -61,7 +61,9 @@ type PartyAddressMatch = {
 
 type PendingOrderDocument = {
   id: string;
-  file: File;
+  file: File | null;
+  fileName: string;
+  fileSize: number | null;
   importId: string | null;
   importStatus: string | null;
   matchResult: any | null;
@@ -313,6 +315,7 @@ function buildNewOrderDraftPayload(params: {
   form: typeof INITIAL_NEW_ORDER_FORM;
   clientSearch: string;
   selectedContactId: string;
+  pendingDocuments: PendingOrderDocument[];
   pendingImportedCompanyCreate: any | null;
   pendingImportedContactCreate: any | null;
   hasImportedPrefill: boolean;
@@ -323,6 +326,16 @@ function buildNewOrderDraftPayload(params: {
     form: params.form,
     clientSearch: params.clientSearch,
     selectedContactId: params.selectedContactId,
+    pendingDocuments: params.pendingDocuments.map((document) => ({
+      id: document.id,
+      fileName: document.fileName,
+      fileSize: document.fileSize,
+      importId: document.importId,
+      importStatus: document.importStatus,
+      matchResult: document.matchResult,
+      importError: document.importError,
+      reviewHandled: document.reviewHandled,
+    })),
     pendingImportedCompanyCreate: params.pendingImportedCompanyCreate,
     pendingImportedContactCreate: params.pendingImportedContactCreate,
     hasImportedPrefill: params.hasImportedPrefill,
@@ -382,6 +395,7 @@ export default function NewOrderPage() {
       form: formRef.current,
       clientSearch: clientSearchRef.current,
       selectedContactId: selectedContactIdRef.current,
+      pendingDocuments: pendingDocumentsRef.current,
       pendingImportedCompanyCreate: pendingImportedCompanyCreateRef.current,
       pendingImportedContactCreate: pendingImportedContactCreateRef.current,
       hasImportedPrefill: hasImportedPrefillRef.current,
@@ -398,6 +412,7 @@ export default function NewOrderPage() {
       !isInitialNewOrderFormValue(nextPayload.form) ||
       nextPayload.clientSearch.trim() !== '' ||
       nextPayload.selectedContactId !== '' ||
+      nextPayload.pendingDocuments.length > 0 ||
       !!nextPayload.pendingImportedCompanyCreate ||
       !!nextPayload.pendingImportedContactCreate ||
       nextPayload.hasImportedPrefill;
@@ -445,6 +460,16 @@ export default function NewOrderPage() {
         form?: Partial<typeof INITIAL_NEW_ORDER_FORM>;
         clientSearch?: string;
         selectedContactId?: string;
+        pendingDocuments?: Array<{
+          id?: string;
+          fileName?: string;
+          fileSize?: number | null;
+          importId?: string | null;
+          importStatus?: string | null;
+          matchResult?: any | null;
+          importError?: string | null;
+          reviewHandled?: boolean;
+        }>;
         pendingImportedCompanyCreate?: any | null;
         pendingImportedContactCreate?: any | null;
         hasImportedPrefill?: boolean;
@@ -465,6 +490,36 @@ export default function NewOrderPage() {
 
       if (typeof parsed.selectedContactId === 'string') {
         setSelectedContactId(parsed.selectedContactId);
+      }
+
+      if (Array.isArray(parsed.pendingDocuments)) {
+        setPendingDocuments(
+          parsed.pendingDocuments
+            .filter(
+              (document) =>
+                typeof document?.id === 'string' &&
+                typeof document?.fileName === 'string'
+            )
+            .map((document) => ({
+              id: document.id as string,
+              file: null,
+              fileName: document.fileName as string,
+              fileSize:
+                typeof document.fileSize === 'number' ? document.fileSize : null,
+              importId:
+                typeof document.importId === 'string' ? document.importId : null,
+              importStatus:
+                typeof document.importStatus === 'string'
+                  ? document.importStatus
+                  : null,
+              matchResult: document.matchResult ?? null,
+              importError:
+                typeof document.importError === 'string'
+                  ? document.importError
+                  : null,
+              reviewHandled: document.reviewHandled === true,
+            }))
+        );
       }
 
       if (parsed.pendingImportedCompanyCreate !== undefined) {
@@ -502,11 +557,13 @@ export default function NewOrderPage() {
     hasImportedPrefillRef.current = hasImportedPrefill;
     vatRateTouchedRef.current = vatRateTouched;
     loadTypeTouchedRef.current = loadTypeTouched;
+    pendingDocumentsRef.current = pendingDocuments;
   }, [
     clientSearch,
     form,
     hasImportedPrefill,
     loadTypeTouched,
+    pendingDocuments,
     pendingImportedCompanyCreate,
     pendingImportedContactCreate,
     selectedContactId,
@@ -524,6 +581,7 @@ export default function NewOrderPage() {
     form,
     hasImportedPrefill,
     loadTypeTouched,
+    pendingDocuments,
     pendingImportedCompanyCreate,
     pendingImportedContactCreate,
     selectedContactId,
@@ -596,10 +654,6 @@ export default function NewOrderPage() {
     form.received_from_name,
     selectedContactId,
   ]);
-
-  useEffect(() => {
-    pendingDocumentsRef.current = pendingDocuments;
-  }, [pendingDocuments]);
 
   useEffect(() => {
     const query = form.shipper_name.trim();
@@ -1117,6 +1171,8 @@ export default function NewOrderPage() {
             return {
               id: crypto.randomUUID(),
               file,
+              fileName: file.name,
+              fileSize: file.size,
               importId: orderImport?.id ?? null,
               importStatus: orderImport?.status ?? 'uploaded',
               matchResult: orderImport?.match_result_json ?? null,
@@ -1127,6 +1183,8 @@ export default function NewOrderPage() {
             return {
               id: crypto.randomUUID(),
               file,
+              fileName: file.name,
+              fileSize: file.size,
               importId: null,
               importStatus: null,
               matchResult: null,
@@ -1173,12 +1231,18 @@ export default function NewOrderPage() {
     const failedFiles: string[] = [];
     let uploadedCount = 0;
 
-    for (const document of pendingDocuments) {
+    for (const document of pendingDocumentsRef.current) {
       const formData = new FormData();
       formData.append('order_id', orderId);
-      formData.append('file', document.file);
+
       if (document.importId) {
+        formData.append('import_id', document.importId);
         formData.append('skip_order_import', '1');
+      } else if (document.file) {
+        formData.append('file', document.file);
+      } else {
+        failedFiles.push(document.fileName);
+        continue;
       }
 
       const res = await fetch('/api/orders/documents/upload', {
@@ -1187,7 +1251,7 @@ export default function NewOrderPage() {
       });
 
       if (!res.ok) {
-        failedFiles.push(document.file.name);
+        failedFiles.push(document.fileName);
         continue;
       }
 
@@ -1792,9 +1856,9 @@ export default function NewOrderPage() {
                     className="flex items-start gap-2 rounded-md border bg-slate-50 px-2 py-1.5"
                   >
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs font-medium text-slate-700">
-                        {document.file.name}
-                      </div>
+                        <div className="truncate text-xs font-medium text-slate-700">
+                          {document.fileName}
+                        </div>
                       <div className="mt-0.5 flex items-center gap-2">
                         <span className="inline-flex rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-medium text-green-700">
                           {document.importStatus === 'ready_for_review'
@@ -1803,9 +1867,11 @@ export default function NewOrderPage() {
                               ? 'Error'
                               : 'Added'}
                         </span>
-                        <span className="text-[10px] text-slate-500">
-                          {formatOrderDocumentFileSize(document.file.size)}
-                        </span>
+                          {typeof document.fileSize === 'number' ? (
+                            <span className="text-[10px] text-slate-500">
+                              {formatOrderDocumentFileSize(document.fileSize)}
+                            </span>
+                          ) : null}
                       </div>
                       {document.importError ? (
                         <div className="mt-0.5 text-[10px] text-red-600">
@@ -1818,7 +1884,7 @@ export default function NewOrderPage() {
                       type="button"
                       onClick={() => void removePendingDocument(document.id)}
                       className="inline-flex h-6 w-6 items-center justify-center rounded-md text-red-600 hover:bg-red-50"
-                      aria-label={`Remove ${document.file.name}`}
+                      aria-label={`Remove ${document.fileName}`}
                     >
                       <X size={14} />
                     </button>
