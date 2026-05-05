@@ -76,6 +76,53 @@ type UploadedOrderImport = {
   error_text?: string | null;
 };
 
+const NEW_ORDER_DRAFT_STORAGE_KEY = 'synchub:new-order-draft:v1';
+const INITIAL_NEW_ORDER_FORM = {
+  client_order_number: '',
+  shared_manager_user_id: '',
+  shared_organization_id: '',
+  client_company_id: '',
+  loading_date: '',
+  loading_time_from: '',
+  loading_time_to: '',
+  loading_address: '',
+  loading_city: '',
+  loading_postal_code: '',
+  loading_country: '',
+  loading_contact: '',
+  loading_reference: '',
+  loading_customs_info: '',
+  unloading_date: '',
+  unloading_time_from: '',
+  unloading_time_to: '',
+  unloading_address: '',
+  unloading_city: '',
+  unloading_postal_code: '',
+  unloading_country: '',
+  unloading_contact: '',
+  unloading_reference: '',
+  unloading_customs_info: '',
+  shipper_name: '',
+  consignee_name: '',
+  received_from_name: '',
+  received_from_contact: '',
+  cargo_kg: '',
+  cargo_quantity: '',
+  cargo_description: '',
+  cargo_ldm: '',
+  load_type: '',
+  has_ex1: false,
+  has_t1: false,
+  has_adr: false,
+  has_sent: false,
+  price: '',
+  vat_rate: '21',
+  currency: 'EUR',
+  payment_term_text: '',
+  payment_type: '',
+  notes: '',
+};
+
 const currencyOptions = ['EUR', 'PLN', 'USD'] as const;
 const vatRateOptions = ['0', '21'] as const;
 const IMPORT_REQUIRED_FIELDS = new Set([
@@ -230,8 +277,58 @@ function normalizePartyMatchText(value: string | null | undefined) {
     .trim();
 }
 
+function hasAnyLocationValue(values: Array<string | null | undefined>) {
+  return values.some((value) => typeof value === 'string' && value.trim() !== '');
+}
+
+function preferExistingText(current: string | null | undefined, incoming: unknown) {
+  if (typeof current === 'string' && current.trim() !== '') {
+    return current;
+  }
+
+  return typeof incoming === 'string' ? incoming : current || '';
+}
+
+function preferExistingNumberishText(current: string | null | undefined, incoming: unknown) {
+  if (typeof current === 'string' && current.trim() !== '') {
+    return current;
+  }
+
+  if (incoming === null || incoming === undefined || incoming === '') {
+    return current || '';
+  }
+
+  return String(incoming);
+}
+
 function joinClassNames(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(' ');
+}
+
+function isInitialNewOrderFormValue(form: typeof INITIAL_NEW_ORDER_FORM) {
+  return Object.entries(INITIAL_NEW_ORDER_FORM).every(([key, value]) => form[key as keyof typeof form] === value);
+}
+
+function buildNewOrderDraftPayload(params: {
+  form: typeof INITIAL_NEW_ORDER_FORM;
+  clientSearch: string;
+  selectedContactId: string;
+  pendingImportedCompanyCreate: any | null;
+  pendingImportedContactCreate: any | null;
+  hasImportedPrefill: boolean;
+  vatRateTouched: boolean;
+  loadTypeTouched: boolean;
+}) {
+  return {
+    form: params.form,
+    clientSearch: params.clientSearch,
+    selectedContactId: params.selectedContactId,
+    pendingImportedCompanyCreate: params.pendingImportedCompanyCreate,
+    pendingImportedContactCreate: params.pendingImportedContactCreate,
+    hasImportedPrefill: params.hasImportedPrefill,
+    vatRateTouched: params.vatRateTouched,
+    loadTypeTouched: params.loadTypeTouched,
+  };
 }
 
 export default function NewOrderPage() {
@@ -259,60 +356,202 @@ export default function NewOrderPage() {
   const [shipperMatches, setShipperMatches] = useState<PartyAddressMatch[]>([]);
   const [consigneeMatches, setConsigneeMatches] = useState<PartyAddressMatch[]>([]);
   const pendingDocumentsRef = useRef<PendingOrderDocument[]>([]);
+  const draftHydratedRef = useRef(false);
+  const [draftReady, setDraftReady] = useState(false);
 
-  const [form, setForm] = useState({
-    client_order_number: '',
-    shared_manager_user_id: '',
-    shared_organization_id: '',
-    client_company_id: '',
-    loading_date: '',
-    loading_time_from: '',
-    loading_time_to: '',
-    loading_address: '',
-    loading_city: '',
-    loading_postal_code: '',
-    loading_country: '',
-    loading_contact: '',
-    loading_reference: '',
-    loading_customs_info: '',
-    unloading_date: '',
-    unloading_time_from: '',
-    unloading_time_to: '',
-    unloading_address: '',
-    unloading_city: '',
-    unloading_postal_code: '',
-    unloading_country: '',
-    unloading_contact: '',
-    unloading_reference: '',
-    unloading_customs_info: '',
-    shipper_name: '',
-    consignee_name: '',
-    received_from_name: '',
-    received_from_contact: '',
-    cargo_kg: '',
-    cargo_quantity: '',
-    cargo_description: '',
-    cargo_ldm: '',
-    load_type: '',
-    has_ex1: false,
-    has_t1: false,
-    has_adr: false,
-    has_sent: false,
-    price: '',
-    vat_rate: '21',
-    currency: 'EUR',
-    payment_term_text: '',
-    payment_type: '',
-    notes: '',
-  });
+  const [form, setForm] = useState(INITIAL_NEW_ORDER_FORM);
+  const formRef = useRef(form);
+  const clientSearchRef = useRef(clientSearch);
+  const selectedContactIdRef = useRef(selectedContactId);
+  const pendingImportedCompanyCreateRef = useRef<any | null>(pendingImportedCompanyCreate);
+  const pendingImportedContactCreateRef = useRef<any | null>(pendingImportedContactCreate);
+  const hasImportedPrefillRef = useRef(hasImportedPrefill);
+  const vatRateTouchedRef = useRef(vatRateTouched);
+  const loadTypeTouchedRef = useRef(loadTypeTouched);
 
   const update = (field: string, value: any) => {
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
+  const persistNewOrderDraft = (override?: Partial<ReturnType<typeof buildNewOrderDraftPayload>>) => {
+    if (typeof window === 'undefined' || !draftHydratedRef.current) {
+      return;
+    }
+
+    const payload = buildNewOrderDraftPayload({
+      form: formRef.current,
+      clientSearch: clientSearchRef.current,
+      selectedContactId: selectedContactIdRef.current,
+      pendingImportedCompanyCreate: pendingImportedCompanyCreateRef.current,
+      pendingImportedContactCreate: pendingImportedContactCreateRef.current,
+      hasImportedPrefill: hasImportedPrefillRef.current,
+      vatRateTouched: vatRateTouchedRef.current,
+      loadTypeTouched: loadTypeTouchedRef.current,
+    });
+
+    const nextPayload = {
+      ...payload,
+      ...override,
+    };
+
+    const hasAnyDraftState =
+      !isInitialNewOrderFormValue(nextPayload.form) ||
+      nextPayload.clientSearch.trim() !== '' ||
+      nextPayload.selectedContactId !== '' ||
+      !!nextPayload.pendingImportedCompanyCreate ||
+      !!nextPayload.pendingImportedContactCreate ||
+      nextPayload.hasImportedPrefill;
+
+    if (!hasAnyDraftState) {
+      window.localStorage.removeItem(NEW_ORDER_DRAFT_STORAGE_KEY);
+      return;
+    }
+
+    window.localStorage.setItem(
+      NEW_ORDER_DRAFT_STORAGE_KEY,
+      JSON.stringify(nextPayload)
+    );
+  };
+
+  const clearNewOrderDraft = () => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.localStorage.removeItem(NEW_ORDER_DRAFT_STORAGE_KEY);
+  };
+
   useEffect(() => {
     fetchClients();
     fetchShareOrganizations();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || draftHydratedRef.current) {
+      return;
+    }
+
+    draftHydratedRef.current = true;
+
+    const savedDraft = window.localStorage.getItem(NEW_ORDER_DRAFT_STORAGE_KEY);
+
+    if (!savedDraft) {
+      setDraftReady(true);
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(savedDraft) as {
+        form?: Partial<typeof INITIAL_NEW_ORDER_FORM>;
+        clientSearch?: string;
+        selectedContactId?: string;
+        pendingImportedCompanyCreate?: any | null;
+        pendingImportedContactCreate?: any | null;
+        hasImportedPrefill?: boolean;
+        vatRateTouched?: boolean;
+        loadTypeTouched?: boolean;
+      };
+
+      if (parsed.form) {
+        setForm((prev) => ({
+          ...prev,
+          ...parsed.form,
+        }));
+      }
+
+      if (typeof parsed.clientSearch === 'string') {
+        setClientSearch(parsed.clientSearch);
+      }
+
+      if (typeof parsed.selectedContactId === 'string') {
+        setSelectedContactId(parsed.selectedContactId);
+      }
+
+      if (parsed.pendingImportedCompanyCreate !== undefined) {
+        setPendingImportedCompanyCreate(parsed.pendingImportedCompanyCreate ?? null);
+      }
+
+      if (parsed.pendingImportedContactCreate !== undefined) {
+        setPendingImportedContactCreate(parsed.pendingImportedContactCreate ?? null);
+      }
+
+      if (typeof parsed.hasImportedPrefill === 'boolean') {
+        setHasImportedPrefill(parsed.hasImportedPrefill);
+      }
+
+      if (typeof parsed.vatRateTouched === 'boolean') {
+        setVatRateTouched(parsed.vatRateTouched);
+      }
+
+      if (typeof parsed.loadTypeTouched === 'boolean') {
+        setLoadTypeTouched(parsed.loadTypeTouched);
+      }
+    } catch {
+      window.localStorage.removeItem(NEW_ORDER_DRAFT_STORAGE_KEY);
+    }
+
+    setDraftReady(true);
+  }, []);
+
+  useEffect(() => {
+    formRef.current = form;
+    clientSearchRef.current = clientSearch;
+    selectedContactIdRef.current = selectedContactId;
+    pendingImportedCompanyCreateRef.current = pendingImportedCompanyCreate;
+    pendingImportedContactCreateRef.current = pendingImportedContactCreate;
+    hasImportedPrefillRef.current = hasImportedPrefill;
+    vatRateTouchedRef.current = vatRateTouched;
+    loadTypeTouchedRef.current = loadTypeTouched;
+  }, [
+    clientSearch,
+    form,
+    hasImportedPrefill,
+    loadTypeTouched,
+    pendingImportedCompanyCreate,
+    pendingImportedContactCreate,
+    selectedContactId,
+    vatRateTouched,
+  ]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !draftHydratedRef.current) {
+      return;
+    }
+
+    persistNewOrderDraft();
+  }, [
+    clientSearch,
+    form,
+    hasImportedPrefill,
+    loadTypeTouched,
+    pendingImportedCompanyCreate,
+    pendingImportedContactCreate,
+    selectedContactId,
+    vatRateTouched,
+  ]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !draftHydratedRef.current) {
+      return;
+    }
+
+    const persistCurrentDraft = () => {
+      persistNewOrderDraft();
+    };
+
+    const persistOnVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        persistCurrentDraft();
+      }
+    };
+
+    window.addEventListener('pagehide', persistCurrentDraft);
+    document.addEventListener('visibilitychange', persistOnVisibilityChange);
+
+    return () => {
+      window.removeEventListener('pagehide', persistCurrentDraft);
+      document.removeEventListener('visibilitychange', persistOnVisibilityChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -549,8 +788,29 @@ export default function NewOrderPage() {
             unloading_city: match.city || '',
             unloading_postal_code: match.postal_code || '',
             unloading_country: match.country || '',
-          }
+        }
     );
+  };
+
+  const shouldApplyStoredPartyAddress = (
+    role: 'shipper' | 'consignee',
+    source: typeof form
+  ) => {
+    if (role === 'shipper') {
+      return !hasAnyLocationValue([
+        source.loading_address,
+        source.loading_city,
+        source.loading_postal_code,
+        source.loading_country,
+      ]);
+    }
+
+    return !hasAnyLocationValue([
+      source.unloading_address,
+      source.unloading_city,
+      source.unloading_postal_code,
+      source.unloading_country,
+    ]);
   };
 
   const resolveStoredPartyAddress = async (
@@ -586,7 +846,7 @@ export default function NewOrderPage() {
         setConsigneeMatches(data.matches || []);
       }
 
-      if (data.exact_match) {
+      if (data.exact_match && shouldApplyStoredPartyAddress(role, form)) {
         applyPartyAddressMatch(role, data.exact_match as PartyAddressMatch);
       }
     } catch (error) {
@@ -1004,77 +1264,131 @@ export default function NewOrderPage() {
 
     setForm((prev) => ({
       ...prev,
-      client_order_number:
-        prefill.client_order_number || prev.client_order_number,
+      client_order_number: preferExistingText(
+        prev.client_order_number,
+        prefill.client_order_number
+      ),
       client_company_id:
-        createNewCompany
-          ? ''
-          : prefill.client_company_id || '',
-      received_from_name: prefill.received_from_name || prev.received_from_name,
-      received_from_contact:
-        prefill.received_from_contact || prev.received_from_contact,
-      loading_date: prefill.loading_date || prev.loading_date,
-      loading_time_from:
-        prefill.loading_time_from || prefill.loading_time || prev.loading_time_from,
-      loading_time_to: prefill.loading_time_to || prev.loading_time_to,
-      loading_address: prefill.loading_address || prev.loading_address,
-      loading_city: prefill.loading_city || prev.loading_city,
-      loading_postal_code:
-        prefill.loading_postal_code || prev.loading_postal_code,
-      loading_country: prefill.loading_country || prev.loading_country,
-      loading_contact: prefill.loading_contact || prev.loading_contact,
-      loading_reference: prefill.loading_reference || prev.loading_reference,
-      loading_customs_info:
-        prefill.loading_customs_info || prev.loading_customs_info,
-      unloading_date: prefill.unloading_date || prev.unloading_date,
-      unloading_time_from:
-        prefill.unloading_time_from || prefill.unloading_time || prev.unloading_time_from,
-      unloading_time_to: prefill.unloading_time_to || prev.unloading_time_to,
-      unloading_address: prefill.unloading_address || prev.unloading_address,
-      unloading_city: prefill.unloading_city || prev.unloading_city,
-      unloading_postal_code:
-        prefill.unloading_postal_code || prev.unloading_postal_code,
-      unloading_country: prefill.unloading_country || prev.unloading_country,
-      unloading_contact: prefill.unloading_contact || prev.unloading_contact,
-      unloading_reference:
-        prefill.unloading_reference || prev.unloading_reference,
-      unloading_customs_info:
-        prefill.unloading_customs_info || prev.unloading_customs_info,
-      shipper_name: prefill.shipper_name || prev.shipper_name,
-      consignee_name: prefill.consignee_name || prev.consignee_name,
-      cargo_description: prefill.cargo_description || prev.cargo_description,
-      cargo_quantity: prefill.cargo_quantity || prev.cargo_quantity,
-      cargo_kg:
-        prefill.cargo_kg !== null && prefill.cargo_kg !== undefined
-          ? String(prefill.cargo_kg)
-          : prev.cargo_kg,
-      cargo_ldm:
-        prefill.cargo_ldm !== null && prefill.cargo_ldm !== undefined
-          ? String(prefill.cargo_ldm)
-          : prev.cargo_ldm,
-      load_type: nextLoadType || prev.load_type,
+        prev.client_company_id ||
+        (createNewCompany ? '' : prefill.client_company_id || ''),
+      received_from_name: preferExistingText(
+        prev.received_from_name,
+        prefill.received_from_name
+      ),
+      received_from_contact: preferExistingText(
+        prev.received_from_contact,
+        prefill.received_from_contact
+      ),
+      loading_date: preferExistingText(prev.loading_date, prefill.loading_date),
+      loading_time_from: preferExistingText(
+        prev.loading_time_from,
+        prefill.loading_time_from || prefill.loading_time
+      ),
+      loading_time_to: preferExistingText(
+        prev.loading_time_to,
+        prefill.loading_time_to
+      ),
+      loading_address: preferExistingText(prev.loading_address, prefill.loading_address),
+      loading_city: preferExistingText(prev.loading_city, prefill.loading_city),
+      loading_postal_code: preferExistingText(
+        prev.loading_postal_code,
+        prefill.loading_postal_code
+      ),
+      loading_country: preferExistingText(
+        prev.loading_country,
+        prefill.loading_country
+      ),
+      loading_contact: preferExistingText(
+        prev.loading_contact,
+        prefill.loading_contact
+      ),
+      loading_reference: preferExistingText(
+        prev.loading_reference,
+        prefill.loading_reference
+      ),
+      loading_customs_info: preferExistingText(
+        prev.loading_customs_info,
+        prefill.loading_customs_info
+      ),
+      unloading_date: preferExistingText(prev.unloading_date, prefill.unloading_date),
+      unloading_time_from: preferExistingText(
+        prev.unloading_time_from,
+        prefill.unloading_time_from || prefill.unloading_time
+      ),
+      unloading_time_to: preferExistingText(
+        prev.unloading_time_to,
+        prefill.unloading_time_to
+      ),
+      unloading_address: preferExistingText(
+        prev.unloading_address,
+        prefill.unloading_address
+      ),
+      unloading_city: preferExistingText(prev.unloading_city, prefill.unloading_city),
+      unloading_postal_code: preferExistingText(
+        prev.unloading_postal_code,
+        prefill.unloading_postal_code
+      ),
+      unloading_country: preferExistingText(
+        prev.unloading_country,
+        prefill.unloading_country
+      ),
+      unloading_contact: preferExistingText(
+        prev.unloading_contact,
+        prefill.unloading_contact
+      ),
+      unloading_reference: preferExistingText(
+        prev.unloading_reference,
+        prefill.unloading_reference
+      ),
+      unloading_customs_info: preferExistingText(
+        prev.unloading_customs_info,
+        prefill.unloading_customs_info
+      ),
+      shipper_name: preferExistingText(prev.shipper_name, prefill.shipper_name),
+      consignee_name: preferExistingText(prev.consignee_name, prefill.consignee_name),
+      cargo_description: preferExistingText(
+        prev.cargo_description,
+        prefill.cargo_description
+      ),
+      cargo_quantity: preferExistingText(prev.cargo_quantity, prefill.cargo_quantity),
+      cargo_kg: preferExistingNumberishText(prev.cargo_kg, prefill.cargo_kg),
+      cargo_ldm: preferExistingNumberishText(prev.cargo_ldm, prefill.cargo_ldm),
+      load_type: prev.load_type || nextLoadType,
       has_ex1: prefill.has_ex1 ?? importedFlags.has_ex1 ?? prev.has_ex1,
       has_t1: prefill.has_t1 ?? importedFlags.has_t1 ?? prev.has_t1,
       has_adr: prefill.has_adr ?? importedFlags.has_adr ?? prev.has_adr,
       has_sent: prefill.has_sent ?? importedFlags.has_sent ?? prev.has_sent,
-      price:
-        prefill.price !== null && prefill.price !== undefined
-          ? String(prefill.price)
-          : prev.price,
-      vat_rate: nextVatRate,
-      currency: prefill.currency || prev.currency,
+      price: preferExistingNumberishText(prev.price, prefill.price),
+      vat_rate: prev.vat_rate || nextVatRate,
+      currency: preferExistingText(prev.currency, prefill.currency),
       payment_term_text:
-        normalizePaymentTermValue(prefill.payment_term_text) ||
-        prev.payment_term_text,
-      payment_type: prefill.payment_type || prev.payment_type,
-      notes: prefill.notes || prev.notes,
+        prev.payment_term_text ||
+        normalizePaymentTermValue(prefill.payment_term_text),
+      payment_type: preferExistingText(prev.payment_type, prefill.payment_type),
+      notes: preferExistingText(prev.notes, prefill.notes),
     }));
 
-    if (nextShipperName) {
+    const nextFormState = {
+      ...form,
+      loading_address: prefill.loading_address || form.loading_address,
+      loading_city: prefill.loading_city || form.loading_city,
+      loading_postal_code: prefill.loading_postal_code || form.loading_postal_code,
+      loading_country: prefill.loading_country || form.loading_country,
+      unloading_address: prefill.unloading_address || form.unloading_address,
+      unloading_city: prefill.unloading_city || form.unloading_city,
+      unloading_postal_code:
+        prefill.unloading_postal_code || form.unloading_postal_code,
+      unloading_country: prefill.unloading_country || form.unloading_country,
+    };
+
+    if (nextShipperName && shouldApplyStoredPartyAddress('shipper', nextFormState)) {
       void resolveStoredPartyAddress('shipper', nextShipperName);
     }
 
-    if (nextConsigneeName) {
+    if (
+      nextConsigneeName &&
+      shouldApplyStoredPartyAddress('consignee', nextFormState)
+    ) {
       void resolveStoredPartyAddress('consignee', nextConsigneeName);
     }
 
@@ -1138,6 +1452,7 @@ export default function NewOrderPage() {
   const refreshPendingImportStatuses = async () => {
     const currentDocuments = pendingDocumentsRef.current;
     const importIds = currentDocuments
+      .filter((document) => !document.reviewHandled)
       .map((document) => document.importId)
       .filter(Boolean) as string[];
 
@@ -1198,6 +1513,7 @@ export default function NewOrderPage() {
   const trackedImportIdsKey = useMemo(
     () =>
       pendingDocuments
+        .filter((document) => !document.reviewHandled)
         .map((document) => document.importId)
         .filter(Boolean)
         .join('|'),
@@ -1373,6 +1689,7 @@ export default function NewOrderPage() {
         toast.success(`Order created: ${data.internal_order_number}`);
       }
 
+      clearNewOrderDraft();
       setPendingDocuments([]);
       router.push('/app/orders');
     } catch (error) {
@@ -1381,6 +1698,16 @@ export default function NewOrderPage() {
       setLoading(false);
     }
   };
+
+  if (!draftReady) {
+    return (
+      <div className="p-6 max-w-4xl mx-auto">
+        <div className="rounded-2xl border bg-white p-6 text-center text-sm text-slate-500">
+          Loading draft...
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
@@ -2096,7 +2423,10 @@ export default function NewOrderPage() {
         </button>
 
         <button
-          onClick={() => router.push('/app/orders')}
+          onClick={() => {
+            clearNewOrderDraft();
+            router.push('/app/orders');
+          }}
           className="border px-6 py-2 rounded-md"
         >
           Cancel
