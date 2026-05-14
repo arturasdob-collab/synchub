@@ -5,6 +5,7 @@ import { cookies } from 'next/headers';
 import {
   canAccessOrderViaCargoRoute,
   cargoLegSelect,
+  ensureInternationalCargoLeg,
   mapCargoLeg,
 } from '@/lib/server/cargo-legs';
 import {
@@ -144,7 +145,29 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const linkedOrderLinkIds = (linkedRowsResponse.data || [])
+    const linkedRows = linkedRowsResponse.data || [];
+
+    if (canManageLinkedTrips && linkedRows.length > 0) {
+      for (const row of linkedRows) {
+        const trip = Array.isArray((row as any).trip)
+          ? (row as any).trip[0] ?? null
+          : (row as any).trip;
+
+        if (!(row as any).id || !(row as any).trip_id || !trip) {
+          continue;
+        }
+
+        await ensureInternationalCargoLeg(serviceSupabase, {
+          organizationId: sourceOrganizationId,
+          orderTripLinkId: (row as any).id,
+          linkedTripId: (row as any).trip_id,
+          linkedTripOrganizationId: trip.organization_id ?? sourceOrganizationId,
+          createdBy: trip.created_by ?? user.id,
+        });
+      }
+    }
+
+    const linkedOrderLinkIds = linkedRows
       .map((row: any) => row.id as string | null)
       .filter(Boolean) as string[];
 
@@ -179,7 +202,7 @@ export async function GET(req: NextRequest) {
       cargoLegsByLinkId.set(linkId, existing);
     }
 
-    const linkedTrips = (linkedRowsResponse.data || [])
+    const linkedTrips = linkedRows
       .map((row: any) => {
         const trip = Array.isArray(row.trip) ? row.trip[0] ?? null : row.trip;
         const createdByUser = trip

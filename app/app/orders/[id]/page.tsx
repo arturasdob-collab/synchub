@@ -157,6 +157,7 @@ type PartyAddressMatch = {
 
 type RouteTripOption = {
   id: string;
+  organization_id: string | null;
   trip_number: string;
   status: string | null;
   driver_name: string | null;
@@ -674,6 +675,7 @@ function getSuggestedCargoLegOrderForPlanStep(
 function mapLinkedTripToRouteTripOption(linkedTrip: LinkedTripRow): RouteTripOption {
   return {
     id: linkedTrip.trip_id,
+    organization_id: linkedTrip.organization_id,
     trip_number: linkedTrip.trip_number,
     status: linkedTrip.status,
     driver_name: linkedTrip.driver_name,
@@ -805,7 +807,7 @@ function buildOrderRoutePlanSteps(plan: OrderRoutePlan, cargoLegs: CargoLegRow[]
             cargoLeg.leg_type === 'reloading' && index < internationalIndex
         )
       : sortedLegs.some((cargoLeg) => cargoLeg.leg_type === 'reloading');
-  const hasInternational = internationalIndex >= 0;
+  const hasInternational = !!plan.international_trip_id || internationalIndex >= 0;
   const hasReloadingAfterInternational =
     internationalIndex >= 0
       ? sortedLegs.some(
@@ -877,10 +879,12 @@ function getSuggestedCargoLegTypeForPlan(
   cargoLegs: CargoLegRow[]
 ): CargoLegType {
   if (!plan) {
-    return 'international_trip';
+    return 'collection';
   }
 
-  const steps = buildOrderRoutePlanSteps(plan, cargoLegs);
+  const steps = buildOrderRoutePlanSteps(plan, cargoLegs).filter(
+    (step) => step.key !== 'international'
+  );
   const missingStep = steps.find((step) => step.planned && !step.complete);
 
   switch (missingStep?.key) {
@@ -888,14 +892,12 @@ function getSuggestedCargoLegTypeForPlan(
       return 'collection';
     case 'reloading_before':
       return 'reloading';
-    case 'international':
-      return 'international_trip';
     case 'reloading_after':
       return 'reloading';
     case 'distribution':
       return 'delivery';
     default:
-      return 'international_trip';
+      return 'collection';
   }
 }
 
@@ -979,6 +981,12 @@ export default function OrderPage() {
     show_to_all_managers: false,
     linked_trip_number: '',
   });
+  const [cargoLegFieldErrors, setCargoLegFieldErrors] = useState<{
+    responsible_organization_id?: string;
+    responsible_warehouse_id?: string;
+    manager_user_ids?: string;
+    linked_trip_number?: string;
+  }>({});
 
   const [form, setForm] = useState({
     id: '',
@@ -1232,6 +1240,10 @@ export default function OrderPage() {
         manager_user_ids: [matchedCargoLegTrip.created_by!],
       };
     });
+    setCargoLegFieldErrors((prev) => ({
+      ...prev,
+      manager_user_ids: undefined,
+    }));
   }, [
     cargoLegManagers,
     cargoLegForm.manager_user_ids.length,
@@ -1239,6 +1251,35 @@ export default function OrderPage() {
     cargoLegForm.show_to_all_managers,
     matchedCargoLegTrip?.created_by,
   ]);
+
+  useEffect(() => {
+    if (!matchedCargoLegTrip?.organization_id) {
+      return;
+    }
+
+    setCargoLegForm((prev) => {
+      const matchedOrganizationId = matchedCargoLegTrip.organization_id || '';
+
+      if (prev.responsible_organization_id === matchedOrganizationId) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        responsible_organization_id: matchedOrganizationId,
+        responsible_warehouse_id: '',
+        manager_user_ids: [],
+        show_to_all_managers: false,
+      };
+    });
+    setCargoLegFieldErrors((prev) => ({
+      ...prev,
+      responsible_organization_id: undefined,
+      responsible_warehouse_id: undefined,
+      manager_user_ids: undefined,
+      linked_trip_number: undefined,
+    }));
+  }, [matchedCargoLegTrip?.organization_id]);
 
   const fetchOrder = async () => {
     try {
@@ -1849,6 +1890,7 @@ export default function OrderPage() {
     setShowCargoLegWarehouseDropdown(false);
     setCargoLegManagerSearch('');
     setShowCargoLegManagerDropdown(false);
+    setCargoLegFieldErrors({});
     setCargoLegForm({
       leg_order: '1',
       leg_type: 'international_trip',
@@ -1886,6 +1928,7 @@ export default function OrderPage() {
     setShowCargoLegWarehouseDropdown(false);
     setCargoLegManagerSearch('');
     setShowCargoLegManagerDropdown(false);
+    setCargoLegFieldErrors({});
     setCargoLegForm({
       leg_order: String(suggestedLegOrder),
       leg_type: suggestedLegType,
@@ -1916,6 +1959,7 @@ export default function OrderPage() {
     setShowCargoLegWarehouseDropdown(false);
     setCargoLegManagerSearch('');
     setShowCargoLegManagerDropdown(false);
+    setCargoLegFieldErrors({});
     setCargoLegForm({
       leg_order: String(cargoLeg.leg_order),
       leg_type: cargoLeg.leg_type,
@@ -1935,12 +1979,13 @@ export default function OrderPage() {
       effectiveRoutePlan,
       linkedTrip.cargo_legs || []
     );
-    const missingSteps = planSteps.filter((step) => step.planned && !step.complete);
+    const missingSteps = planSteps.filter(
+      (step) => step.key !== 'international' && step.planned && !step.complete
+    );
     const actionableMissingSteps = missingSteps.filter(
       (step) =>
         step.key === 'collection' ||
         step.key === 'reloading_before' ||
-        step.key === 'international' ||
         step.key === 'reloading_after' ||
         step.key === 'distribution'
     );
@@ -2047,6 +2092,10 @@ export default function OrderPage() {
       if (data.matched_trip) {
         setMatchedCargoLegTrip(data.matched_trip);
         setCargoLegLookupMessage('');
+        setCargoLegFieldErrors((prev) => ({
+          ...prev,
+          linked_trip_number: undefined,
+        }));
         return;
       }
 
@@ -2072,6 +2121,13 @@ export default function OrderPage() {
     setShowCargoLegWarehouseDropdown(false);
     setCargoLegManagerSearch('');
     setShowCargoLegManagerDropdown(false);
+    setCargoLegFieldErrors((prev) => ({
+      ...prev,
+      responsible_organization_id: undefined,
+      responsible_warehouse_id: undefined,
+      manager_user_ids: undefined,
+      linked_trip_number: undefined,
+    }));
     setCargoLegForm((prev) => ({
       ...prev,
       responsible_organization_id: organizationId,
@@ -2092,6 +2148,10 @@ export default function OrderPage() {
     }));
     setCargoLegManagerSearch('');
     setShowCargoLegManagerDropdown(false);
+    setCargoLegFieldErrors((prev) => ({
+      ...prev,
+      manager_user_ids: undefined,
+    }));
   };
 
   const selectCargoLegWarehouse = (warehouseId: string) => {
@@ -2100,6 +2160,10 @@ export default function OrderPage() {
     setCargoLegForm((prev) => ({
       ...prev,
       responsible_warehouse_id: warehouseId,
+    }));
+    setCargoLegFieldErrors((prev) => ({
+      ...prev,
+      responsible_warehouse_id: undefined,
     }));
   };
 
@@ -2142,6 +2206,51 @@ export default function OrderPage() {
       show_to_all_managers: !prev.show_to_all_managers,
       manager_user_ids: !prev.show_to_all_managers ? [] : prev.manager_user_ids,
     }));
+    setCargoLegFieldErrors((prev) => ({
+      ...prev,
+      manager_user_ids: undefined,
+    }));
+  };
+
+  const validateCargoLegEditor = (options: {
+    requireMatchedTrip: boolean;
+    requireManagers: boolean;
+  }) => {
+    const nextErrors: {
+      responsible_organization_id?: string;
+      responsible_warehouse_id?: string;
+      manager_user_ids?: string;
+      linked_trip_number?: string;
+    } = {};
+
+    if (!cargoLegForm.responsible_organization_id) {
+      nextErrors.responsible_organization_id = 'Choose responsible organization';
+    }
+
+    if (options.requireMatchedTrip && !matchedCargoLegTrip) {
+      nextErrors.linked_trip_number = 'Choose or type existing trip number';
+    }
+
+    if (cargoLegWarehouses.length > 0 && !cargoLegForm.responsible_warehouse_id) {
+      nextErrors.responsible_warehouse_id = 'Choose warehouse';
+    }
+
+    if (
+      options.requireManagers &&
+      !cargoLegForm.show_to_all_managers &&
+      cargoLegForm.manager_user_ids.length === 0
+    ) {
+      nextErrors.manager_user_ids = 'Choose route managers or All';
+    }
+
+    setCargoLegFieldErrors(nextErrors);
+
+    if (Object.keys(nextErrors).length > 0) {
+      toast.error(Object.values(nextErrors)[0] || 'Fill required route fields');
+      return false;
+    }
+
+    return true;
   };
 
   const saveCargoLeg = async () => {
@@ -2150,32 +2259,14 @@ export default function OrderPage() {
       return;
     }
 
-    if (!cargoLegForm.responsible_organization_id) {
-      toast.error('Choose responsible organization');
-      return;
-    }
-
-    if (!matchedCargoLegTrip) {
-      toast.error('First choose trip');
-      return;
-    }
-
-    if (cargoLegWarehouses.length > 0 && !cargoLegForm.responsible_warehouse_id) {
-      toast.error('Choose warehouse');
-      return;
-    }
-
-    if (
-      !cargoLegForm.show_to_all_managers &&
-      cargoLegForm.manager_user_ids.length === 0
-    ) {
-      toast.error('Choose route managers or All');
+    if (!validateCargoLegEditor({ requireMatchedTrip: true, requireManagers: true })) {
       return;
     }
 
     try {
       setCargoLegSaving(true);
       const requestedOrder = Number(cargoLegForm.leg_order);
+      const matchedTripId = matchedCargoLegTrip!.id;
 
       const payload = editingCargoLegId
         ? {
@@ -2186,7 +2277,7 @@ export default function OrderPage() {
             responsible_warehouse_id: cargoLegForm.responsible_warehouse_id,
             manager_user_ids: cargoLegForm.manager_user_ids,
             show_to_all_managers: cargoLegForm.show_to_all_managers,
-            linked_trip_id: matchedCargoLegTrip.id,
+            linked_trip_id: matchedTripId,
           }
         : {
             order_trip_link_id: cargoLegEditorLinkId,
@@ -2196,7 +2287,7 @@ export default function OrderPage() {
             responsible_warehouse_id: cargoLegForm.responsible_warehouse_id,
             manager_user_ids: cargoLegForm.manager_user_ids,
             show_to_all_managers: cargoLegForm.show_to_all_managers,
-            linked_trip_id: matchedCargoLegTrip.id,
+            linked_trip_id: matchedTripId,
           };
 
       const res = await fetch(
@@ -2231,27 +2322,18 @@ export default function OrderPage() {
       return;
     }
 
-    if (!cargoLegForm.responsible_organization_id) {
-      toast.error('Choose responsible organization');
-      return;
-    }
-
-    if (
-      !cargoLegForm.show_to_all_managers &&
-      cargoLegForm.manager_user_ids.length === 0
-    ) {
-      toast.error('Choose route managers or All');
-      return;
-    }
-
-    if (cargoLegWarehouses.length > 0 && !cargoLegForm.responsible_warehouse_id) {
-      toast.error('Choose warehouse');
+    if (!validateCargoLegEditor({ requireMatchedTrip: false, requireManagers: false })) {
       return;
     }
 
     try {
       setCreatingCargoLinkedTrip(true);
       const requestedOrder = Number(cargoLegForm.leg_order);
+      const shouldDefaultToAllManagers =
+        !cargoLegForm.show_to_all_managers &&
+        cargoLegForm.manager_user_ids.length === 0;
+      const nextShowToAllManagers =
+        cargoLegForm.show_to_all_managers || shouldDefaultToAllManagers;
 
       const res = await fetch('/api/cargo-legs/create-linked-trip', {
         method: 'POST',
@@ -2263,8 +2345,8 @@ export default function OrderPage() {
           leg_type: cargoLegForm.leg_type,
           responsible_organization_id: cargoLegForm.responsible_organization_id,
           responsible_warehouse_id: cargoLegForm.responsible_warehouse_id,
-          manager_user_ids: cargoLegForm.manager_user_ids,
-          show_to_all_managers: cargoLegForm.show_to_all_managers,
+          manager_user_ids: nextShowToAllManagers ? [] : cargoLegForm.manager_user_ids,
+          show_to_all_managers: nextShowToAllManagers,
         }),
       });
 
@@ -2565,10 +2647,23 @@ export default function OrderPage() {
             onChange={(e) => {
               setCargoLegOrganizationSearch(e.target.value);
               setShowCargoLegOrganizationDropdown(true);
+              setCargoLegFieldErrors((prev) => ({
+                ...prev,
+                responsible_organization_id: undefined,
+              }));
             }}
             placeholder="Organization"
-            className="w-full rounded-md border px-3 py-2"
+            className={`w-full rounded-md border px-3 py-2 ${
+              cargoLegFieldErrors.responsible_organization_id
+                ? 'border-red-500 ring-1 ring-red-200'
+                : ''
+            }`}
           />
+          {cargoLegFieldErrors.responsible_organization_id ? (
+            <div className="mt-1 text-xs text-red-600">
+              {cargoLegFieldErrors.responsible_organization_id}
+            </div>
+          ) : null}
 
           {showCargoLegOrganizationDropdown ? (
             <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded-md border bg-white shadow-sm">
@@ -2626,6 +2721,10 @@ export default function OrderPage() {
             onChange={(e) => {
               setCargoLegWarehouseSearch(e.target.value);
               setShowCargoLegWarehouseDropdown(true);
+              setCargoLegFieldErrors((prev) => ({
+                ...prev,
+                responsible_warehouse_id: undefined,
+              }));
             }}
             placeholder={
               cargoLegWarehousesLoading
@@ -2634,11 +2733,20 @@ export default function OrderPage() {
                   ? 'Warehouse'
                   : 'No warehouses'
             }
-            className="w-full rounded-md border px-3 py-2"
+            className={`w-full rounded-md border px-3 py-2 ${
+              cargoLegFieldErrors.responsible_warehouse_id
+                ? 'border-red-500 ring-1 ring-red-200'
+                : ''
+            }`}
             disabled={
               !cargoLegForm.responsible_organization_id || cargoLegWarehousesLoading
             }
           />
+          {cargoLegFieldErrors.responsible_warehouse_id ? (
+            <div className="mt-1 text-xs text-red-600">
+              {cargoLegFieldErrors.responsible_warehouse_id}
+            </div>
+          ) : null}
 
           {showCargoLegWarehouseDropdown && cargoLegForm.responsible_organization_id ? (
             <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded-md border bg-white shadow-sm">
@@ -2700,15 +2808,28 @@ export default function OrderPage() {
                   show_to_all_managers: false,
                 }));
               }
+              setCargoLegFieldErrors((prev) => ({
+                ...prev,
+                manager_user_ids: undefined,
+              }));
               setCargoLegManagerSearch(e.target.value);
               setShowCargoLegManagerDropdown(true);
             }}
             placeholder="Managers / All"
-            className="w-full rounded-md border px-3 py-2"
+            className={`w-full rounded-md border px-3 py-2 ${
+              cargoLegFieldErrors.manager_user_ids
+                ? 'border-red-500 ring-1 ring-red-200'
+                : ''
+            }`}
             disabled={
               !cargoLegForm.responsible_organization_id || cargoLegManagersLoading
             }
           />
+          {cargoLegFieldErrors.manager_user_ids ? (
+            <div className="mt-1 text-xs text-red-600">
+              {cargoLegFieldErrors.manager_user_ids}
+            </div>
+          ) : null}
 
           {showCargoLegManagerDropdown && cargoLegForm.responsible_organization_id ? (
             <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded-md border bg-white shadow-sm">
@@ -2769,14 +2890,27 @@ export default function OrderPage() {
           <input
             placeholder="TR-000004"
             value={cargoLegForm.linked_trip_number}
-            onChange={(e) =>
+            onChange={(e) => {
+              setCargoLegFieldErrors((prev) => ({
+                ...prev,
+                linked_trip_number: undefined,
+              }));
               setCargoLegForm((prev) => ({
                 ...prev,
                 linked_trip_number: e.target.value.toUpperCase(),
-              }))
-            }
-            className="w-full rounded-md border px-3 py-2"
+              }));
+            }}
+            className={`w-full rounded-md border px-3 py-2 ${
+              cargoLegFieldErrors.linked_trip_number
+                ? 'border-red-500 ring-1 ring-red-200'
+                : ''
+            }`}
           />
+          {cargoLegFieldErrors.linked_trip_number ? (
+            <div className="mt-1 text-xs text-red-600">
+              {cargoLegFieldErrors.linked_trip_number}
+            </div>
+          ) : null}
         </div>
 
         {!matchedCargoLegTrip && (

@@ -66,6 +66,86 @@ export const cargoLegSelect = `
   )
 `;
 
+export async function ensureInternationalCargoLeg(
+  serviceSupabase: ServiceSupabase,
+  params: {
+    organizationId: string;
+    orderTripLinkId: string;
+    linkedTripId: string;
+    linkedTripOrganizationId?: string | null;
+    createdBy: string;
+  }
+) {
+  const { data, error } = await serviceSupabase
+    .from('cargo_legs')
+    .select('id, leg_order, leg_type')
+    .eq('organization_id', params.organizationId)
+    .eq('order_trip_link_id', params.orderTripLinkId)
+    .order('leg_order', { ascending: true });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const existingRows = ((data || []) as any[]).map((row: any) => ({
+    id: row.id as string,
+    leg_order: Number(row.leg_order),
+    leg_type: row.leg_type as string,
+  }));
+
+  if (existingRows.some((row: { leg_type: string }) => row.leg_type === 'international_trip')) {
+    return false;
+  }
+
+  const firstDeliveryOrder =
+    existingRows.find((row: { leg_type: string; leg_order: number }) => row.leg_type === 'delivery')?.leg_order ?? null;
+  const insertOrder =
+    firstDeliveryOrder ??
+    (existingRows.length > 0
+      ? Math.max(...existingRows.map((row: { leg_order: number }) => row.leg_order)) + 1
+      : 1);
+
+  const rowsToShift = existingRows
+    .filter((row: { leg_order: number }) => row.leg_order >= insertOrder)
+    .sort(
+      (
+        left: { leg_order: number },
+        right: { leg_order: number }
+      ) => right.leg_order - left.leg_order
+    );
+
+  for (const row of rowsToShift) {
+    const { error: updateError } = await serviceSupabase
+      .from('cargo_legs')
+      .update({ leg_order: row.leg_order + 1 })
+      .eq('id', row.id)
+      .eq('organization_id', params.organizationId);
+
+    if (updateError) {
+      throw new Error(updateError.message);
+    }
+  }
+
+  const { error: insertError } = await serviceSupabase.from('cargo_legs').insert({
+    organization_id: params.organizationId,
+    responsible_organization_id:
+      params.linkedTripOrganizationId ?? params.organizationId,
+    responsible_warehouse_id: null,
+    show_to_all_managers: true,
+    order_trip_link_id: params.orderTripLinkId,
+    linked_trip_id: params.linkedTripId,
+    leg_order: insertOrder,
+    leg_type: 'international_trip',
+    created_by: params.createdBy,
+  });
+
+  if (insertError) {
+    throw new Error(insertError.message);
+  }
+
+  return true;
+}
+
 function normalizeManagerUserIds(value: unknown) {
   if (!Array.isArray(value)) {
     return [];
@@ -142,6 +222,7 @@ export function mapCargoLeg(cargoLeg: any) {
     linked_trip: linkedTrip
       ? {
           id: linkedTrip.id,
+          organization_id: linkedTrip.organization_id ?? null,
           trip_number: linkedTrip.trip_number,
           status: linkedTrip.status ?? null,
           driver_name: linkedTrip.driver_name ?? null,

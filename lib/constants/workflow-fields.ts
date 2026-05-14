@@ -4,6 +4,8 @@ export type WorkflowRecordType = (typeof WORKFLOW_RECORD_TYPES)[number];
 
 export const WORKFLOW_EDITABLE_FIELD_KEYS = [
   'status',
+  'prep',
+  'delivery',
   'contact',
   'sender',
   'loading',
@@ -28,6 +30,8 @@ export const WORKFLOW_FIELD_LABELS: Record<
   string
 > = {
   status: 'Status',
+  prep: 'Prep',
+  delivery: 'Delivery',
   contact: 'Contact',
   sender: 'Sender',
   loading: 'Loading',

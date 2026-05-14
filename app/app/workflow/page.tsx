@@ -1,6 +1,15 @@
 'use client';
 
-import { Fragment, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type FocusEvent as ReactFocusEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -10,6 +19,12 @@ import {
   type WorkflowEditableFieldKey,
   type WorkflowExecutionStatus,
 } from '@/lib/constants/workflow-fields';
+import {
+  buildWorkflowScheduleValue,
+  formatWorkflowScheduleSummary,
+  parseWorkflowScheduleValueText,
+  serializeWorkflowScheduleValue,
+} from '@/lib/utils/workflow-schedule';
 
 type WorkflowFieldState = {
   update_id: string;
@@ -28,6 +43,14 @@ type WorkflowFieldStateMap = Partial<
   Record<WorkflowEditableFieldKey, WorkflowFieldState>
 >;
 
+type WorkflowRouteStepDisplay = {
+  cargo_leg_id: string;
+  organization_name: string | null;
+  warehouse_name: string | null;
+  linked_trip_number: string | null;
+  summary: string;
+};
+
 type WorkflowStandaloneRow = {
   row_type: 'order_row' | 'trip_row';
   id: string;
@@ -35,8 +58,12 @@ type WorkflowStandaloneRow = {
   trip_id: string | null;
   status: string | null;
   prep_date: string | null;
+  prep_time_from?: string | null;
+  prep_time_to?: string | null;
   prep_display?: string | null;
   delivery_date: string | null;
+  delivery_time_from?: string | null;
+  delivery_time_to?: string | null;
   delivery_display?: string | null;
   record_number: string;
   client_order_number?: string | null;
@@ -68,6 +95,7 @@ type WorkflowStandaloneRow = {
   open_order_id: string | null;
   open_trip_id: string | null;
   route_plan?: WorkflowRoutePlan | null;
+  route_steps?: Partial<Record<WorkflowRouteEditorStepKey, WorkflowRouteStepDisplay | null>> | null;
   field_states: WorkflowFieldStateMap;
   trip_editable_by_current_user?: boolean;
 };
@@ -92,6 +120,14 @@ type WorkflowGroup = {
   trip_id: string;
   trip_number: string;
   trip_status: string | null;
+  prep_date?: string | null;
+  prep_time_from?: string | null;
+  prep_time_to?: string | null;
+  prep_display?: string | null;
+  delivery_date?: string | null;
+  delivery_time_from?: string | null;
+  delivery_time_to?: string | null;
+  delivery_display?: string | null;
   carrier_display: string;
   responsible_display: string;
   vehicle_display: string;
@@ -142,6 +178,88 @@ type WorkflowCustomColumnsResponse = {
   custom_columns: WorkflowCustomColumn[];
 };
 
+type WorkflowRouteTripOption = {
+  id: string;
+  organization_id: string | null;
+  trip_number: string;
+  status: string | null;
+  driver_name: string | null;
+  truck_plate: string | null;
+  trailer_plate: string | null;
+  is_groupage: boolean | null;
+  created_by: string | null;
+  created_by_user: {
+    first_name: string | null;
+    last_name: string | null;
+  } | null;
+  carrier: {
+    name: string | null;
+    company_code: string | null;
+  } | null;
+};
+
+type WorkflowCargoLegRow = {
+  id: string;
+  organization_id: string | null;
+  responsible_organization_id: string | null;
+  responsible_warehouse_id: string | null;
+  show_to_all_managers: boolean;
+  order_trip_link_id: string;
+  linked_trip_id: string | null;
+  leg_order: number;
+  leg_type: 'collection' | 'reloading' | 'international_trip' | 'delivery';
+  created_at: string | null;
+  updated_at: string | null;
+  responsible_organization: {
+    id: string | null;
+    name: string | null;
+    address: string | null;
+    city: string | null;
+    postal_code: string | null;
+    country: string | null;
+    contact_phone: string | null;
+    contact_email: string | null;
+  } | null;
+  responsible_warehouse: {
+    id: string | null;
+    name: string | null;
+    address: string | null;
+    city: string | null;
+    postal_code: string | null;
+    country: string | null;
+  } | null;
+  shared_managers: Array<{
+    id: string | null;
+    shared_organization_id: string | null;
+    first_name: string | null;
+    last_name: string | null;
+  }>;
+  linked_trip: WorkflowRouteTripOption | null;
+};
+
+type WorkflowLinkedTripRow = {
+  link_id: string;
+  trip_id: string;
+  organization_id: string | null;
+  trip_number: string;
+  status: string | null;
+  is_groupage: boolean | null;
+  driver_name: string | null;
+  truck_plate: string | null;
+  trailer_plate: string | null;
+  created_by: string | null;
+  created_by_user: {
+    first_name: string | null;
+    last_name: string | null;
+  } | null;
+  created_at: string | null;
+  carrier: {
+    name: string | null;
+    company_code: string | null;
+  } | null;
+  cargo_legs: WorkflowCargoLegRow[];
+};
+
 type WorkflowFieldUpdateResponse = {
   id: string;
   record_type: 'order' | 'trip';
@@ -161,6 +279,16 @@ type WorkflowRoutePlanUpdateResponse = {
 type OrganizationOption = {
   id: string;
   name: string;
+};
+
+type OrganizationWarehouseOption = {
+  id: string;
+  organization_id: string;
+  name: string;
+  address: string | null;
+  city: string | null;
+  postal_code: string | null;
+  country: string | null;
 };
 
 type ManagerOption = {
@@ -188,6 +316,28 @@ type WorkflowEditingCell = {
         | 'post_international_reloading_mode';
     }
 );
+
+type WorkflowCollectionEditorState = {
+  row_id: string;
+  order_id: string;
+  trip_id: string | null;
+  order_trip_link_id: string;
+  cargo_leg_id: string | null;
+  existing_cargo_legs: WorkflowCargoLegRow[];
+  step_key: 'collection' | 'reloading_before' | 'reloading_after' | 'distribution';
+  mode:
+    | WorkflowRoutePlan['collection_mode']
+    | WorkflowRoutePlan['reloading_mode']
+    | WorkflowRoutePlan['distribution_mode']
+    | WorkflowRoutePlan['post_international_reloading_mode'];
+  responsible_organization_id: string;
+  responsible_warehouse_id: string;
+  manager_user_ids: string[];
+  show_to_all_managers: boolean;
+  linked_trip_number: string;
+};
+
+type WorkflowRouteEditorStepKey = WorkflowCollectionEditorState['step_key'];
 
 type WorkflowFilters = {
   search: string;
@@ -307,6 +457,37 @@ const WORKFLOW_DISTRIBUTION_MODE_OPTIONS = [
   { value: 'distribution_trip', label: 'Distribution trip' },
 ] as const;
 
+const WORKFLOW_ROUTE_EDITOR_CONFIG = {
+  collection: {
+    label: 'Collection',
+    routeMode: 'collection_trip',
+    legType: 'collection',
+    planKey: 'collection_mode',
+    emptyTripHint: 'Type existing trip number or create a new collection trip.',
+  },
+  reloading_before: {
+    label: 'Reloading',
+    routeMode: 'reloading',
+    legType: 'reloading',
+    planKey: 'reloading_mode',
+    emptyTripHint: 'Type existing trip number or create a new reloading trip.',
+  },
+  reloading_after: {
+    label: 'Reloading 2',
+    routeMode: 'reloading',
+    legType: 'reloading',
+    planKey: 'post_international_reloading_mode',
+    emptyTripHint: 'Type existing trip number or create a new reloading trip.',
+  },
+  distribution: {
+    label: 'Distribution',
+    routeMode: 'distribution_trip',
+    legType: 'delivery',
+    planKey: 'distribution_mode',
+    emptyTripHint: 'Type existing trip number or create a new distribution trip.',
+  },
+} as const;
+
 const WORKFLOW_COLUMN_CONFIG = [
   { id: 'status', defaultWidth: 84, minWidth: 52 },
   { id: 'prep', defaultWidth: 88, minWidth: 64 },
@@ -420,11 +601,64 @@ function formatNumberCell(value: number | null | undefined) {
   return `${value}`;
 }
 
-function formatManagerLabel(manager: ManagerOption | null | undefined) {
+function formatManagerLabel(
+  manager:
+    | ManagerOption
+    | {
+        id?: string | null;
+        first_name: string | null;
+        last_name: string | null;
+      }
+    | null
+    | undefined
+) {
   if (!manager) return '-';
 
   const value = `${manager.first_name || ''} ${manager.last_name || ''}`.trim();
   return value || '-';
+}
+
+function formatOrganizationLocation(organization: {
+  address?: string | null;
+  city?: string | null;
+  postal_code?: string | null;
+  country?: string | null;
+} | null | undefined) {
+  if (!organization) {
+    return '-';
+  }
+
+  const parts = [
+    organization.address,
+    organization.city,
+    organization.postal_code,
+    organization.country,
+  ]
+    .filter(Boolean)
+    .map((value) => value!.trim())
+    .filter(Boolean);
+
+  return parts.length > 0 ? parts.join(', ') : '-';
+}
+
+function formatWorkflowManagerNames(
+  managers:
+    | Array<{
+        first_name: string | null;
+        last_name: string | null;
+      }>
+    | null
+    | undefined
+) {
+  if (!managers || managers.length === 0) {
+    return '-';
+  }
+
+  const names = managers
+    .map((manager) => `${manager.first_name || ''} ${manager.last_name || ''}`.trim())
+    .filter((value) => value !== '');
+
+  return names.length > 0 ? names.join(', ') : '-';
 }
 
 function formatWorkflowCollectionMode(
@@ -457,17 +691,262 @@ function formatWorkflowPostInternationalReloadingMode(
   return formatWorkflowReloadingMode(value);
 }
 
-function formatWorkflowInternationalPlan(routePlan: WorkflowRoutePlan | null | undefined) {
+function getWorkflowRouteEditorLabel(stepKey: WorkflowRouteEditorStepKey) {
+  return WORKFLOW_ROUTE_EDITOR_CONFIG[stepKey].label;
+}
+
+function getWorkflowRouteEditorModeOptions(stepKey: WorkflowRouteEditorStepKey) {
+  switch (stepKey) {
+    case 'collection':
+      return WORKFLOW_COLLECTION_MODE_OPTIONS;
+    case 'distribution':
+      return WORKFLOW_DISTRIBUTION_MODE_OPTIONS;
+    case 'reloading_before':
+    case 'reloading_after':
+      return WORKFLOW_RELOADING_MODE_OPTIONS;
+    default:
+      return WORKFLOW_COLLECTION_MODE_OPTIONS;
+  }
+}
+
+function getWorkflowRouteEditorModeValue(
+  routePlan: WorkflowRoutePlan | null | undefined,
+  stepKey: WorkflowRouteEditorStepKey
+) {
   if (!routePlan) {
-    return '-';
+    return 'not_set';
   }
 
-  const values = [
-    routePlan.international_trip_number || '-',
-    routePlan.setup_status === 'setup_needed' ? 'Setup needed' : '',
-  ].filter((value) => value && value !== '-');
+  switch (stepKey) {
+    case 'collection':
+      return routePlan.collection_mode;
+    case 'reloading_before':
+      return routePlan.reloading_mode;
+    case 'distribution':
+      return routePlan.distribution_mode;
+    case 'reloading_after':
+      return routePlan.post_international_reloading_mode;
+    default:
+      return 'not_set';
+  }
+}
 
-  return values.length > 0 ? values.join(' / ') : '-';
+function formatWorkflowRouteEditorValue(
+  stepKey: WorkflowRouteEditorStepKey,
+  routePlan: WorkflowRoutePlan | null | undefined
+) {
+  switch (stepKey) {
+    case 'collection':
+      return formatWorkflowCollectionMode(routePlan?.collection_mode);
+    case 'reloading_before':
+      return formatWorkflowReloadingMode(routePlan?.reloading_mode);
+    case 'distribution':
+      return formatWorkflowDistributionMode(routePlan?.distribution_mode);
+    case 'reloading_after':
+      return formatWorkflowPostInternationalReloadingMode(
+        routePlan?.post_international_reloading_mode
+      );
+    default:
+      return '-';
+  }
+}
+
+function getWorkflowRouteEditorRouteMode(stepKey: WorkflowRouteEditorStepKey) {
+  return WORKFLOW_ROUTE_EDITOR_CONFIG[stepKey].routeMode;
+}
+
+function getWorkflowRouteEditorLegType(stepKey: WorkflowRouteEditorStepKey) {
+  return WORKFLOW_ROUTE_EDITOR_CONFIG[stepKey].legType;
+}
+
+function buildWorkflowRoutePlanUpdatePayload(
+  currentRoutePlan: WorkflowRoutePlan | null,
+  stepKey: WorkflowRouteEditorStepKey,
+  mode: WorkflowCollectionEditorState['mode']
+) {
+  return {
+    collection_mode:
+      stepKey === 'collection'
+        ? (mode as WorkflowRoutePlan['collection_mode'])
+        : currentRoutePlan?.collection_mode || 'not_set',
+    reloading_mode:
+      stepKey === 'reloading_before'
+        ? (mode as WorkflowRoutePlan['reloading_mode'])
+        : currentRoutePlan?.reloading_mode || 'not_set',
+    distribution_mode:
+      stepKey === 'distribution'
+        ? (mode as WorkflowRoutePlan['distribution_mode'])
+        : currentRoutePlan?.distribution_mode || 'not_set',
+    post_international_reloading_mode:
+      stepKey === 'reloading_after'
+        ? (mode as WorkflowRoutePlan['post_international_reloading_mode'])
+        : currentRoutePlan?.post_international_reloading_mode || 'not_set',
+  };
+}
+
+function getNextWorkflowCargoLegOrder(cargoLegs: WorkflowCargoLegRow[]) {
+  if (cargoLegs.length === 0) {
+    return 1;
+  }
+
+  return Math.max(...cargoLegs.map((cargoLeg) => cargoLeg.leg_order)) + 1;
+}
+
+function getSuggestedWorkflowCargoLegOrderForStep(
+  stepKey: WorkflowRouteEditorStepKey,
+  cargoLegs: WorkflowCargoLegRow[]
+) {
+  const sortedLegs = [...cargoLegs].sort((left, right) => left.leg_order - right.leg_order);
+
+  if (sortedLegs.length === 0) {
+    return 1;
+  }
+
+  const findFirstOrder = (
+    matcher: (cargoLeg: WorkflowCargoLegRow, index: number) => boolean
+  ) => {
+    const matchedLeg = sortedLegs.find(matcher);
+    return matchedLeg?.leg_order ?? null;
+  };
+
+  const findLastOrder = (
+    matcher: (cargoLeg: WorkflowCargoLegRow, index: number) => boolean
+  ) => {
+    const matchedLegs = sortedLegs.filter(matcher);
+    return matchedLegs.length > 0 ? matchedLegs[matchedLegs.length - 1].leg_order : null;
+  };
+
+  const firstInternationalOrder = findFirstOrder(
+    (cargoLeg) => cargoLeg.leg_type === 'international_trip'
+  );
+  const firstDeliveryOrder = findFirstOrder((cargoLeg) => cargoLeg.leg_type === 'delivery');
+  const lastPreInternationalOrder = findLastOrder(
+    (cargoLeg) => cargoLeg.leg_type === 'collection' || cargoLeg.leg_type === 'reloading'
+  );
+  const lastInternationalOrder = findLastOrder(
+    (cargoLeg) => cargoLeg.leg_type === 'international_trip'
+  );
+  const lastNonDeliveryOrder = findLastOrder((cargoLeg) => cargoLeg.leg_type !== 'delivery');
+
+  switch (stepKey) {
+    case 'collection':
+      return 1;
+    case 'reloading_before':
+      return (
+        firstInternationalOrder ??
+        firstDeliveryOrder ??
+        ((lastPreInternationalOrder ?? 0) + 1)
+      );
+    case 'reloading_after':
+      return (
+        firstDeliveryOrder ??
+        ((lastInternationalOrder ?? lastPreInternationalOrder ?? 0) + 1)
+      );
+    case 'distribution':
+      return (lastNonDeliveryOrder ?? 0) + 1;
+    default:
+      return getNextWorkflowCargoLegOrder(sortedLegs);
+  }
+}
+
+function findWorkflowRouteEditorCargoLeg(
+  cargoLegs: WorkflowCargoLegRow[],
+  stepKey: WorkflowRouteEditorStepKey
+) {
+  const sortedLegs = [...cargoLegs].sort((left, right) => left.leg_order - right.leg_order);
+
+  if (stepKey === 'collection') {
+    return sortedLegs.find((cargoLeg) => cargoLeg.leg_type === 'collection') || null;
+  }
+
+  if (stepKey === 'distribution') {
+    const internationalIndex = sortedLegs.findIndex(
+      (cargoLeg) => cargoLeg.leg_type === 'international_trip'
+    );
+
+    if (internationalIndex >= 0) {
+      return (
+        sortedLegs.find(
+          (cargoLeg, index) => cargoLeg.leg_type === 'delivery' && index > internationalIndex
+        ) || null
+      );
+    }
+
+    return sortedLegs.find((cargoLeg) => cargoLeg.leg_type === 'delivery') || null;
+  }
+
+  if (stepKey === 'reloading_before') {
+    const internationalIndex = sortedLegs.findIndex(
+      (cargoLeg) => cargoLeg.leg_type === 'international_trip'
+    );
+
+    if (internationalIndex >= 0) {
+      return (
+        sortedLegs.find(
+          (cargoLeg, index) => cargoLeg.leg_type === 'reloading' && index < internationalIndex
+        ) || null
+      );
+    }
+
+    return sortedLegs.find((cargoLeg) => cargoLeg.leg_type === 'reloading') || null;
+  }
+
+  if (stepKey === 'reloading_after') {
+    const internationalIndex = sortedLegs.findIndex(
+      (cargoLeg) => cargoLeg.leg_type === 'international_trip'
+    );
+
+    if (internationalIndex >= 0) {
+      return (
+        sortedLegs.find(
+          (cargoLeg, index) => cargoLeg.leg_type === 'reloading' && index > internationalIndex
+        ) || null
+      );
+    }
+
+    return null;
+  }
+
+  return null;
+}
+
+function formatWorkflowInternationalPlan(routePlan: WorkflowRoutePlan | null | undefined) {
+  if (!routePlan) {
+    return 'Not linked';
+  }
+
+  return routePlan.international_trip_number || 'Not linked';
+}
+
+function formatWorkflowRouteStepSummary(
+  row: WorkflowStandaloneRow,
+  stepKey: WorkflowRouteEditorStepKey
+) {
+  const stepSummary = row.route_steps?.[stepKey]?.summary;
+
+  if (stepSummary && stepSummary.trim() !== '') {
+    return stepSummary;
+  }
+
+  return formatWorkflowRouteEditorValue(stepKey, row.route_plan);
+}
+
+function getWorkflowRouteStepDisplay(
+  row: WorkflowStandaloneRow,
+  stepKey: WorkflowRouteEditorStepKey
+) {
+  switch (stepKey) {
+    case 'collection':
+      return row.route_steps?.collection ?? null;
+    case 'reloading_before':
+      return row.route_steps?.reloading_before ?? null;
+    case 'reloading_after':
+      return row.route_steps?.reloading_after ?? null;
+    case 'distribution':
+      return row.route_steps?.distribution ?? null;
+    default:
+      return null;
+  }
 }
 
 function removeCompanyCode(value: string | null | undefined) {
@@ -687,6 +1166,22 @@ function buildPendingFieldState(
   };
 }
 
+function buildScheduleEditingValue(params: {
+  date: string | null | undefined;
+  timeFrom: string | null | undefined;
+  timeTo: string | null | undefined;
+}) {
+  return (
+    serializeWorkflowScheduleValue(
+      buildWorkflowScheduleValue({
+        date: params.date,
+        time_from: params.timeFrom,
+        time_to: params.timeTo,
+      })
+    ) || ''
+  );
+}
+
 function applyFieldUpdateToStandaloneRow(
   row: WorkflowStandaloneRow,
   fieldUpdate: WorkflowFieldUpdateResponse,
@@ -718,6 +1213,22 @@ function applyFieldUpdateToStandaloneRow(
           nextRow.status = fieldUpdate.value_text || nextRow.status || 'active';
         }
       }
+      break;
+    }
+    case 'prep': {
+      const prepSchedule = parseWorkflowScheduleValueText(fieldUpdate.value_text);
+      nextRow.prep_date = prepSchedule?.date ?? null;
+      nextRow.prep_time_from = prepSchedule?.time_from ?? null;
+      nextRow.prep_time_to = prepSchedule?.time_to ?? null;
+      nextRow.prep_display = formatWorkflowScheduleSummary(prepSchedule);
+      break;
+    }
+    case 'delivery': {
+      const deliverySchedule = parseWorkflowScheduleValueText(fieldUpdate.value_text);
+      nextRow.delivery_date = deliverySchedule?.date ?? null;
+      nextRow.delivery_time_from = deliverySchedule?.time_from ?? null;
+      nextRow.delivery_time_to = deliverySchedule?.time_to ?? null;
+      nextRow.delivery_display = formatWorkflowScheduleSummary(deliverySchedule);
       break;
     }
     case 'contact': {
@@ -902,6 +1413,22 @@ function applyFieldUpdateToGroup(
       case 'status':
         nextGroup.trip_status = fieldUpdate.value_text || nextGroup.trip_status || 'active';
         break;
+      case 'prep': {
+        const prepSchedule = parseWorkflowScheduleValueText(fieldUpdate.value_text);
+        nextGroup.prep_date = prepSchedule?.date ?? null;
+        nextGroup.prep_time_from = prepSchedule?.time_from ?? null;
+        nextGroup.prep_time_to = prepSchedule?.time_to ?? null;
+        nextGroup.prep_display = formatWorkflowScheduleSummary(prepSchedule);
+        break;
+      }
+      case 'delivery': {
+        const deliverySchedule = parseWorkflowScheduleValueText(fieldUpdate.value_text);
+        nextGroup.delivery_date = deliverySchedule?.date ?? null;
+        nextGroup.delivery_time_from = deliverySchedule?.time_from ?? null;
+        nextGroup.delivery_time_to = deliverySchedule?.time_to ?? null;
+        nextGroup.delivery_display = formatWorkflowScheduleSummary(deliverySchedule);
+        break;
+      }
       case 'contact':
         nextGroup.responsible_display = fieldUpdate.value_text || '-';
         break;
@@ -1316,7 +1843,7 @@ function WorkflowTableHeader({
     kind: renderTextFilter('kind', 'Kind', 'kind', 'w-32', 'Kind'),
     collection_plan: renderTextFilter('collection_plan', 'Collection', 'collectionPlan', 'w-36', 'Collection'),
     reloading_plan: renderTextFilter('reloading_plan', 'Reloading', 'reloadingPlan', 'w-36', 'Reloading'),
-    international_plan: renderTextFilter('international_plan', 'Intl trip', 'internationalPlan', 'w-40', 'Trip / setup'),
+    international_plan: renderTextFilter('international_plan', 'Intl trip', 'internationalPlan', 'w-40', 'Linked trip'),
     distribution_plan: renderTextFilter('distribution_plan', 'Distribution', 'distributionPlan', 'w-40', 'Distribution'),
     reloading_after_international_plan: renderTextFilter('reloading_after_international_plan', 'Reloading 2', 'reloadingAfterIntlPlan', 'w-40', 'Reloading after intl'),
     company: renderTextFilter('company', 'Company', 'company', 'w-40', 'Company'),
@@ -1366,6 +1893,7 @@ function WorkflowDisplayCell({
   onSubmitEdit,
   onCancelEdit,
   selectOptions,
+  scheduleEditor = false,
 }: {
   value: string | null | undefined;
   scrollable?: boolean;
@@ -1379,8 +1907,85 @@ function WorkflowDisplayCell({
   onSubmitEdit?: (() => void) | null;
   onCancelEdit?: (() => void) | null;
   selectOptions?: Array<{ value: string; label: string }>;
+  scheduleEditor?: boolean;
 }) {
   if (isEditing) {
+    if (scheduleEditor) {
+      const schedule = parseWorkflowScheduleValueText(editingValue) || {
+        date: null,
+        time_from: null,
+        time_to: null,
+      };
+
+      const updateScheduleValue = (next: {
+        date?: string | null;
+        time_from?: string | null;
+        time_to?: string | null;
+      }) => {
+        onChangeEditingValue?.(
+          serializeWorkflowScheduleValue({
+            date: next.date ?? schedule.date ?? null,
+            time_from: next.time_from ?? schedule.time_from ?? null,
+            time_to: next.time_to ?? schedule.time_to ?? null,
+          }) || ''
+        );
+      };
+
+      const handleWrapperBlur = (event: ReactFocusEvent<HTMLDivElement>) => {
+        if (event.relatedTarget && event.currentTarget.contains(event.relatedTarget as Node)) {
+          return;
+        }
+
+        onSubmitEdit?.();
+      };
+
+      const handleInputKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          onSubmitEdit?.();
+        }
+
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          onCancelEdit?.();
+        }
+      };
+
+      return (
+        <div
+          className="grid min-w-[240px] grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1fr)] gap-1"
+          onBlur={handleWrapperBlur}
+        >
+          <input
+            autoFocus
+            type="date"
+            value={schedule.date || ''}
+            onChange={(event) => updateScheduleValue({ date: event.target.value || null })}
+            onKeyDown={handleInputKeyDown}
+            className="workflow-edit-input min-w-0 rounded-md border border-sky-400 bg-white px-1 leading-none outline-none ring-1 ring-sky-200"
+          />
+          <input
+            type="time"
+            value={schedule.time_from || ''}
+            onChange={(event) =>
+              updateScheduleValue({ time_from: event.target.value || null })
+            }
+            onKeyDown={handleInputKeyDown}
+            className="workflow-edit-input min-w-0 rounded-md border border-sky-400 bg-white px-1 leading-none outline-none ring-1 ring-sky-200"
+          />
+          <input
+            type="time"
+            value={schedule.time_to || ''}
+            onChange={(event) =>
+              updateScheduleValue({ time_to: event.target.value || null })
+            }
+            onKeyDown={handleInputKeyDown}
+            className="workflow-edit-input min-w-0 rounded-md border border-sky-400 bg-white px-1 leading-none outline-none ring-1 ring-sky-200"
+          />
+        </div>
+      );
+    }
+
     if (selectOptions && selectOptions.length > 0) {
       return (
         <select
@@ -1444,6 +2049,303 @@ function WorkflowDisplayCell({
   );
 }
 
+function WorkflowCollectionRouteEditor({
+  value,
+  editor,
+  active = false,
+  onOpen,
+}: {
+  value: string;
+  editor: WorkflowCollectionEditorState | null;
+  active?: boolean;
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className={`block w-full text-left rounded-md ${
+        active ? 'ring-2 ring-sky-300 ring-offset-1' : ''
+      }`}
+      title={value}
+    >
+      <CompactCell value={value} scrollable />
+    </button>
+  );
+}
+
+function WorkflowCollectionRouteEditorOverlay({
+  editor,
+  organizations,
+  managers,
+  warehouses,
+  matchedTrip,
+  loading,
+  saving,
+  lookupLoading,
+  errors,
+  onChange,
+  onSave,
+  onCreateTrip,
+  onCancel,
+}: {
+  editor: WorkflowCollectionEditorState;
+  organizations: OrganizationOption[];
+  managers: ManagerOption[];
+  warehouses: OrganizationWarehouseOption[];
+  matchedTrip: WorkflowRouteTripOption | null;
+  loading: boolean;
+  saving: boolean;
+  lookupLoading: boolean;
+  errors: {
+    responsible_organization_id?: string;
+    responsible_warehouse_id?: string;
+    manager_user_ids?: string;
+    linked_trip_number?: string;
+  };
+  onChange: (
+    patch: Partial<WorkflowCollectionEditorState> | ((prev: WorkflowCollectionEditorState) => WorkflowCollectionEditorState)
+  ) => void;
+  onSave: () => void;
+  onCreateTrip: () => void;
+  onCancel: () => void;
+}) {
+  const organizationValue = editor.responsible_organization_id;
+  const managerValue = editor.show_to_all_managers
+    ? '__all__'
+    : editor.manager_user_ids[0] || '';
+  const stepLabel = getWorkflowRouteEditorLabel(editor.step_key);
+  const modeOptions = getWorkflowRouteEditorModeOptions(editor.step_key);
+  const routeMode = getWorkflowRouteEditorRouteMode(editor.step_key);
+  const modeRequiresRoute = editor.mode === routeMode;
+  const tripHint = WORKFLOW_ROUTE_EDITOR_CONFIG[editor.step_key].emptyTripHint;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/15 px-4 py-16 backdrop-blur-[1px]"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onCancel();
+        }
+      }}
+    >
+      <div className="w-full max-w-2xl rounded-2xl border border-sky-200 bg-white shadow-2xl">
+        <div className="border-b border-slate-200 px-4 py-3">
+          <div className="text-sm font-semibold text-slate-900">{stepLabel} route setup</div>
+          <div className="text-xs text-slate-500">
+            This saves directly into Order -&gt; Cargo Route.
+          </div>
+        </div>
+        <div className="space-y-3 p-4">
+      <div className="grid gap-3 md:grid-cols-2">
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+            Mode
+          </label>
+          <select
+            value={editor.mode}
+            onChange={(event) =>
+              onChange({
+                mode: event.target.value as WorkflowCollectionEditorState['mode'],
+              })
+            }
+            className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+          >
+            {modeOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+            Managers / All
+          </label>
+          <select
+            value={managerValue}
+            onChange={(event) => {
+              const nextValue = event.target.value;
+              if (nextValue === '__all__') {
+                onChange({
+                  show_to_all_managers: true,
+                  manager_user_ids: [],
+                });
+                return;
+              }
+
+              onChange({
+                show_to_all_managers: false,
+                manager_user_ids: nextValue ? [nextValue] : [],
+              });
+            }}
+            className={`w-full rounded-md border bg-white px-2 py-1 text-xs ${
+              errors.manager_user_ids ? 'border-red-400' : 'border-slate-300'
+            }`}
+          >
+            <option value="">-</option>
+            <option value="__all__">All</option>
+            {managers.map((manager) => (
+              <option key={manager.id} value={manager.id}>
+                {formatManagerLabel(manager)}
+              </option>
+            ))}
+          </select>
+          {errors.manager_user_ids ? (
+            <div className="mt-1 text-[10px] text-red-600">{errors.manager_user_ids}</div>
+          ) : null}
+        </div>
+      </div>
+
+      {modeRequiresRoute ? (
+        <>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                Organization
+              </label>
+              <select
+                value={organizationValue}
+                onChange={(event) =>
+                  onChange({
+                    responsible_organization_id: event.target.value,
+                    responsible_warehouse_id: '',
+                    manager_user_ids: [],
+                    show_to_all_managers: false,
+                  })
+                }
+                className={`w-full rounded-md border bg-white px-2 py-1 text-xs ${
+                  errors.responsible_organization_id ? 'border-red-400' : 'border-slate-300'
+                }`}
+              >
+                <option value="">Choose organization</option>
+                {organizations.map((organization) => (
+                  <option key={organization.id} value={organization.id}>
+                    {organization.name}
+                  </option>
+                ))}
+              </select>
+              {errors.responsible_organization_id ? (
+                <div className="mt-1 text-[10px] text-red-600">
+                  {errors.responsible_organization_id}
+                </div>
+              ) : null}
+            </div>
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                Warehouse
+              </label>
+              <select
+                value={editor.responsible_warehouse_id}
+                onChange={(event) =>
+                  onChange({ responsible_warehouse_id: event.target.value })
+                }
+                className={`w-full rounded-md border bg-white px-2 py-1 text-xs ${
+                  errors.responsible_warehouse_id ? 'border-red-400' : 'border-slate-300'
+                }`}
+              >
+                <option value="">No warehouse</option>
+                {warehouses.map((warehouse) => (
+                  <option key={warehouse.id} value={warehouse.id}>
+                    {warehouse.name}
+                  </option>
+                ))}
+              </select>
+              {errors.responsible_warehouse_id ? (
+                <div className="mt-1 text-[10px] text-red-600">
+                  {errors.responsible_warehouse_id}
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+              Trip number
+            </label>
+            <div className="flex gap-2">
+              <input
+                value={editor.linked_trip_number}
+                onChange={(event) =>
+                  onChange({ linked_trip_number: event.target.value.toUpperCase() })
+                }
+                placeholder="TR-000000"
+                className={`min-w-0 flex-1 rounded-md border bg-white px-2 py-1 text-xs ${
+                  errors.linked_trip_number ? 'border-red-400' : 'border-slate-300'
+                }`}
+              />
+              <button
+                type="button"
+                onClick={onCreateTrip}
+                disabled={saving || loading}
+                className="shrink-0 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Create trip
+              </button>
+            </div>
+            {errors.linked_trip_number ? (
+              <div className="mt-1 text-[10px] text-red-600">{errors.linked_trip_number}</div>
+            ) : null}
+          </div>
+
+          <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
+            {lookupLoading ? (
+              <span className="text-slate-500">Looking up trip...</span>
+            ) : matchedTrip ? (
+              <div className="space-y-1">
+                <div className="font-medium text-slate-900">
+                  {matchedTrip.trip_number}
+                </div>
+                <div>{matchedTrip.carrier?.name || '-'}</div>
+                <div className="text-slate-500">
+                  {[
+                    formatManagerLabel(matchedTrip.created_by_user),
+                    matchedTrip.driver_name,
+                    matchedTrip.truck_plate,
+                  ]
+                    .filter(Boolean)
+                    .join(' / ') || '-'}
+                </div>
+              </div>
+            ) : (
+              <span className="text-slate-500">
+                {tripHint}
+              </span>
+            )}
+          </div>
+        </>
+      ) : (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
+          {editor.cargo_leg_id
+            ? `${stepLabel} route step already exists. Remove it in Order -> Cargo Route before switching to a non-trip option.`
+            : 'This will save only the workflow plan. No cargo route step will be created yet.'}
+        </div>
+      )}
+
+      <div className="flex items-center justify-end gap-2 pt-1">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={saving || loading}
+          className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={saving || loading}
+          className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {saving ? 'Saving...' : 'Save'}
+        </button>
+      </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WorkflowStandaloneRowView({
   row,
   columnOrder,
@@ -1458,6 +2360,20 @@ function WorkflowStandaloneRowView({
   onChangeEditingValue,
   onSubmitEdit,
   onCancelEdit,
+  collectionRouteEditor,
+  collectionRouteEditorOrganizations,
+  collectionRouteEditorManagers,
+  collectionRouteEditorWarehouses,
+  collectionRouteEditorMatchedTrip,
+  collectionRouteEditorLoading,
+  collectionRouteEditorSaving,
+  collectionRouteEditorLookupLoading,
+  collectionRouteEditorErrors,
+  onOpenCollectionRouteEditor,
+  onChangeCollectionRouteEditor,
+  onSaveCollectionRouteEditor,
+  onCreateCollectionRouteTrip,
+  onCancelCollectionRouteEditor,
   rowStyle,
   onStartResizeRow,
   onResetRowHeight,
@@ -1482,6 +2398,32 @@ function WorkflowStandaloneRowView({
   onChangeEditingValue: (value: string) => void;
   onSubmitEdit: () => void;
   onCancelEdit: () => void;
+  collectionRouteEditor: WorkflowCollectionEditorState | null;
+  collectionRouteEditorOrganizations: OrganizationOption[];
+  collectionRouteEditorManagers: ManagerOption[];
+  collectionRouteEditorWarehouses: OrganizationWarehouseOption[];
+  collectionRouteEditorMatchedTrip: WorkflowRouteTripOption | null;
+  collectionRouteEditorLoading: boolean;
+  collectionRouteEditorSaving: boolean;
+  collectionRouteEditorLookupLoading: boolean;
+  collectionRouteEditorErrors: {
+    responsible_organization_id?: string;
+    responsible_warehouse_id?: string;
+    manager_user_ids?: string;
+    linked_trip_number?: string;
+  };
+  onOpenCollectionRouteEditor: (
+    row: WorkflowStandaloneRow,
+    stepKey: WorkflowRouteEditorStepKey
+  ) => void;
+  onChangeCollectionRouteEditor: (
+    patch:
+      | Partial<WorkflowCollectionEditorState>
+      | ((prev: WorkflowCollectionEditorState) => WorkflowCollectionEditorState)
+  ) => void;
+  onSaveCollectionRouteEditor: () => void;
+  onCreateCollectionRouteTrip: () => void;
+  onCancelCollectionRouteEditor: () => void;
   rowStyle?: CSSProperties;
   onStartResizeRow: (rowId: string, clientY: number) => void;
   onResetRowHeight: (rowId: string) => void;
@@ -1522,6 +2464,14 @@ function WorkflowStandaloneRowView({
     allowAcknowledge && !!row.trip_editable_by_current_user && !!row.trip_id;
   const canEditOrderField = allowAcknowledge && !!row.order_id;
   const canEditTripField = allowAcknowledge && row.row_type === 'trip_row' && !!row.trip_id;
+  const prepCell = row.order_id ? orderFieldCell('prep') : null;
+  const deliveryCell = row.order_id ? orderFieldCell('delivery') : null;
+  const tripPrepCell = canEditTripField ? tripFieldCell('prep') : null;
+  const tripDeliveryCell = canEditTripField ? tripFieldCell('delivery') : null;
+  const effectivePrepCell = prepCell ?? tripPrepCell;
+  const effectiveDeliveryCell = deliveryCell ?? tripDeliveryCell;
+  const canEditPrep = allowAcknowledge && !!effectivePrepCell;
+  const canEditDelivery = allowAcknowledge && !!effectiveDeliveryCell;
   const collectionPlanCell = buildRoutePlanEditingCell(
     row.id,
     row.order_id,
@@ -1545,6 +2495,8 @@ function WorkflowStandaloneRowView({
   const statusCell =
     row.row_type === 'trip_row' ? tripFieldCell('status') : orderFieldCell('status');
   const canEditStatus = allowAcknowledge && !!statusCell;
+  const isCollectionEditorOpen = (stepKey: WorkflowRouteEditorStepKey) =>
+    collectionRouteEditor?.row_id === row.id && collectionRouteEditor?.step_key === stepKey;
 
   const cells: Record<WorkflowColumnId, ReactNode> = {
     status: (
@@ -1574,12 +2526,62 @@ function WorkflowStandaloneRowView({
     ),
     prep: (
       <td className="px-2 py-1.5 whitespace-nowrap">
-        <CompactCell value={row.prep_display || row.prep_date || '-'} />
+        <WorkflowDisplayCell
+          value={row.prep_display || row.prep_date || '-'}
+          scrollable
+          state={row.field_states.prep}
+          onAcknowledge={acknowledge(row.field_states.prep)}
+          editable={canEditPrep}
+          onStartEdit={
+            canEditPrep && effectivePrepCell
+              ? () =>
+                  onStartEdit(
+                    effectivePrepCell,
+                    buildScheduleEditingValue({
+                      date: row.prep_date,
+                      timeFrom: row.prep_time_from,
+                      timeTo: row.prep_time_to,
+                    })
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(effectivePrepCell)}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
+          scheduleEditor
+        />
       </td>
     ),
     delivery: (
       <td className="px-2 py-1.5 whitespace-nowrap">
-        <CompactCell value={row.delivery_display || row.delivery_date || '-'} />
+        <WorkflowDisplayCell
+          value={row.delivery_display || row.delivery_date || '-'}
+          scrollable
+          state={row.field_states.delivery}
+          onAcknowledge={acknowledge(row.field_states.delivery)}
+          editable={canEditDelivery}
+          onStartEdit={
+            canEditDelivery && effectiveDeliveryCell
+              ? () =>
+                  onStartEdit(
+                    effectiveDeliveryCell,
+                    buildScheduleEditingValue({
+                      date: row.delivery_date,
+                      timeFrom: row.delivery_time_from,
+                      timeTo: row.delivery_time_to,
+                    })
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(effectiveDeliveryCell)}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
+          scheduleEditor
+        />
       </td>
     ),
     record_number: (
@@ -1615,53 +2617,21 @@ function WorkflowStandaloneRowView({
     ),
     collection_plan: (
       <td className="px-2 py-1.5 whitespace-nowrap">
-        <WorkflowDisplayCell
-          value={formatWorkflowCollectionMode(row.route_plan?.collection_mode)}
-          editable={canEditOrderField && !!collectionPlanCell}
-          onStartEdit={
-            canEditOrderField && collectionPlanCell
-              ? () =>
-                  onStartEdit(
-                    collectionPlanCell,
-                    row.route_plan?.collection_mode || 'not_set'
-                  )
-              : null
-          }
-          isEditing={matchesEditingCell(collectionPlanCell)}
-          editingValue={editingValue}
-          onChangeEditingValue={onChangeEditingValue}
-          onSubmitEdit={onSubmitEdit}
-          onCancelEdit={onCancelEdit}
-          selectOptions={WORKFLOW_COLLECTION_MODE_OPTIONS.map((option) => ({
-            value: option.value,
-            label: option.label,
-          }))}
+        <WorkflowCollectionRouteEditor
+          value={formatWorkflowRouteStepSummary(row, 'collection')}
+          editor={isCollectionEditorOpen('collection') ? collectionRouteEditor : null}
+          active={isCollectionEditorOpen('collection')}
+          onOpen={() => onOpenCollectionRouteEditor(row, 'collection')}
         />
       </td>
     ),
     reloading_plan: (
       <td className="px-2 py-1.5 whitespace-nowrap">
-        <WorkflowDisplayCell
-          value={formatWorkflowReloadingMode(row.route_plan?.reloading_mode)}
-          editable={canEditOrderField && !!reloadingPlanCell}
-          onStartEdit={
-            canEditOrderField && reloadingPlanCell
-              ? () =>
-                  onStartEdit(
-                    reloadingPlanCell,
-                    row.route_plan?.reloading_mode || 'not_set'
-                  )
-              : null
-          }
-          isEditing={matchesEditingCell(reloadingPlanCell)}
-          editingValue={editingValue}
-          onChangeEditingValue={onChangeEditingValue}
-          onSubmitEdit={onSubmitEdit}
-          onCancelEdit={onCancelEdit}
-          selectOptions={WORKFLOW_RELOADING_MODE_OPTIONS.map((option) => ({
-            value: option.value,
-            label: option.label,
-          }))}
+        <WorkflowCollectionRouteEditor
+          value={formatWorkflowRouteStepSummary(row, 'reloading_before')}
+          editor={isCollectionEditorOpen('reloading_before') ? collectionRouteEditor : null}
+          active={isCollectionEditorOpen('reloading_before')}
+          onOpen={() => onOpenCollectionRouteEditor(row, 'reloading_before')}
         />
       </td>
     ),
@@ -1683,55 +2653,21 @@ function WorkflowStandaloneRowView({
     ),
     distribution_plan: (
       <td className="px-2 py-1.5 whitespace-nowrap">
-        <WorkflowDisplayCell
-          value={formatWorkflowDistributionMode(row.route_plan?.distribution_mode)}
-          editable={canEditOrderField && !!distributionPlanCell}
-          onStartEdit={
-            canEditOrderField && distributionPlanCell
-              ? () =>
-                  onStartEdit(
-                    distributionPlanCell,
-                    row.route_plan?.distribution_mode || 'not_set'
-                  )
-              : null
-          }
-          isEditing={matchesEditingCell(distributionPlanCell)}
-          editingValue={editingValue}
-          onChangeEditingValue={onChangeEditingValue}
-          onSubmitEdit={onSubmitEdit}
-          onCancelEdit={onCancelEdit}
-          selectOptions={WORKFLOW_DISTRIBUTION_MODE_OPTIONS.map((option) => ({
-            value: option.value,
-            label: option.label,
-          }))}
+        <WorkflowCollectionRouteEditor
+          value={formatWorkflowRouteStepSummary(row, 'distribution')}
+          editor={isCollectionEditorOpen('distribution') ? collectionRouteEditor : null}
+          active={isCollectionEditorOpen('distribution')}
+          onOpen={() => onOpenCollectionRouteEditor(row, 'distribution')}
         />
       </td>
     ),
     reloading_after_international_plan: (
       <td className="px-2 py-1.5 whitespace-nowrap">
-        <WorkflowDisplayCell
-          value={formatWorkflowPostInternationalReloadingMode(
-            row.route_plan?.post_international_reloading_mode
-          )}
-          editable={canEditOrderField && !!postInternationalReloadingPlanCell}
-          onStartEdit={
-            canEditOrderField && postInternationalReloadingPlanCell
-              ? () =>
-                  onStartEdit(
-                    postInternationalReloadingPlanCell,
-                    row.route_plan?.post_international_reloading_mode || 'not_set'
-                  )
-              : null
-          }
-          isEditing={matchesEditingCell(postInternationalReloadingPlanCell)}
-          editingValue={editingValue}
-          onChangeEditingValue={onChangeEditingValue}
-          onSubmitEdit={onSubmitEdit}
-          onCancelEdit={onCancelEdit}
-          selectOptions={WORKFLOW_RELOADING_MODE_OPTIONS.map((option) => ({
-            value: option.value,
-            label: option.label,
-          }))}
+        <WorkflowCollectionRouteEditor
+          value={formatWorkflowRouteStepSummary(row, 'reloading_after')}
+          editor={isCollectionEditorOpen('reloading_after') ? collectionRouteEditor : null}
+          active={isCollectionEditorOpen('reloading_after')}
+          onOpen={() => onOpenCollectionRouteEditor(row, 'reloading_after')}
         />
       </td>
     ),
@@ -2145,6 +3081,20 @@ function GroupageBlock({
   onChangeEditingValue,
   onSubmitEdit,
   onCancelEdit,
+  collectionRouteEditor,
+  collectionRouteEditorOrganizations,
+  collectionRouteEditorManagers,
+  collectionRouteEditorWarehouses,
+  collectionRouteEditorMatchedTrip,
+  collectionRouteEditorLoading,
+  collectionRouteEditorSaving,
+  collectionRouteEditorLookupLoading,
+  collectionRouteEditorErrors,
+  onOpenCollectionRouteEditor,
+  onChangeCollectionRouteEditor,
+  onSaveCollectionRouteEditor,
+  onCreateCollectionRouteTrip,
+  onCancelCollectionRouteEditor,
 }: {
   group: WorkflowGroup;
   columnOrder: WorkflowColumnOrder;
@@ -2185,6 +3135,32 @@ function GroupageBlock({
   onChangeEditingValue: (value: string) => void;
   onSubmitEdit: () => void;
   onCancelEdit: () => void;
+  collectionRouteEditor: WorkflowCollectionEditorState | null;
+  collectionRouteEditorOrganizations: OrganizationOption[];
+  collectionRouteEditorManagers: ManagerOption[];
+  collectionRouteEditorWarehouses: OrganizationWarehouseOption[];
+  collectionRouteEditorMatchedTrip: WorkflowRouteTripOption | null;
+  collectionRouteEditorLoading: boolean;
+  collectionRouteEditorSaving: boolean;
+  collectionRouteEditorLookupLoading: boolean;
+  collectionRouteEditorErrors: {
+    responsible_organization_id?: string;
+    responsible_warehouse_id?: string;
+    manager_user_ids?: string;
+    linked_trip_number?: string;
+  };
+  onOpenCollectionRouteEditor: (
+    row: WorkflowStandaloneRow,
+    stepKey: WorkflowRouteEditorStepKey
+  ) => void;
+  onChangeCollectionRouteEditor: (
+    patch:
+      | Partial<WorkflowCollectionEditorState>
+      | ((prev: WorkflowCollectionEditorState) => WorkflowCollectionEditorState)
+  ) => void;
+  onSaveCollectionRouteEditor: () => void;
+  onCreateCollectionRouteTrip: () => void;
+  onCancelCollectionRouteEditor: () => void;
 }) {
   const acknowledge = (
     state: WorkflowFieldState | null | undefined
@@ -2196,6 +3172,7 @@ function GroupageBlock({
   const canEditTripField =
     allowAcknowledge && !!group.trip_editable_by_current_user;
   const canEditGroupStatus = allowAcknowledge;
+  const canEditGroupSchedule = allowAcknowledge && !!group.trip_editable_by_current_user;
 
   const groupHeaderCell = (fieldKey: WorkflowEditableFieldKey): WorkflowEditingCell => ({
     row_id: group.id,
@@ -2246,8 +3223,66 @@ function GroupageBlock({
         />
       </td>
     ),
-    prep: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
-    delivery: <td className="px-2 py-1 whitespace-nowrap"><CompactCell value="-" /></td>,
+    prep: (
+      <td className="px-2 py-1 whitespace-nowrap">
+        <WorkflowDisplayCell
+          value={group.prep_display || group.prep_date || '-'}
+          scrollable
+          state={group.field_states.prep}
+          onAcknowledge={acknowledge(group.field_states.prep)}
+          editable={canEditGroupSchedule}
+          onStartEdit={
+            canEditGroupSchedule
+              ? () =>
+                  onStartEdit(
+                    groupHeaderCell('prep'),
+                    buildScheduleEditingValue({
+                      date: group.prep_date,
+                      timeFrom: group.prep_time_from,
+                      timeTo: group.prep_time_to,
+                    })
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(groupHeaderCell('prep'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
+          scheduleEditor
+        />
+      </td>
+    ),
+    delivery: (
+      <td className="px-2 py-1 whitespace-nowrap">
+        <WorkflowDisplayCell
+          value={group.delivery_display || group.delivery_date || '-'}
+          scrollable
+          state={group.field_states.delivery}
+          onAcknowledge={acknowledge(group.field_states.delivery)}
+          editable={canEditGroupSchedule}
+          onStartEdit={
+            canEditGroupSchedule
+              ? () =>
+                  onStartEdit(
+                    groupHeaderCell('delivery'),
+                    buildScheduleEditingValue({
+                      date: group.delivery_date,
+                      timeFrom: group.delivery_time_from,
+                      timeTo: group.delivery_time_to,
+                    })
+                  )
+              : null
+          }
+          isEditing={matchesEditingCell(groupHeaderCell('delivery'))}
+          editingValue={editingValue}
+          onChangeEditingValue={onChangeEditingValue}
+          onSubmitEdit={onSubmitEdit}
+          onCancelEdit={onCancelEdit}
+          scheduleEditor
+        />
+      </td>
+    ),
     record_number: (
       <td className="px-2 py-1 whitespace-nowrap font-semibold text-slate-900">
         <button
@@ -2511,6 +3546,20 @@ function GroupageBlock({
               onChangeEditingValue={onChangeEditingValue}
               onSubmitEdit={onSubmitEdit}
               onCancelEdit={onCancelEdit}
+              collectionRouteEditor={collectionRouteEditor}
+              collectionRouteEditorOrganizations={collectionRouteEditorOrganizations}
+              collectionRouteEditorManagers={collectionRouteEditorManagers}
+              collectionRouteEditorWarehouses={collectionRouteEditorWarehouses}
+              collectionRouteEditorMatchedTrip={collectionRouteEditorMatchedTrip}
+              collectionRouteEditorLoading={collectionRouteEditorLoading}
+              collectionRouteEditorSaving={collectionRouteEditorSaving}
+              collectionRouteEditorLookupLoading={collectionRouteEditorLookupLoading}
+              collectionRouteEditorErrors={collectionRouteEditorErrors}
+              onOpenCollectionRouteEditor={onOpenCollectionRouteEditor}
+              onChangeCollectionRouteEditor={onChangeCollectionRouteEditor}
+              onSaveCollectionRouteEditor={onSaveCollectionRouteEditor}
+              onCreateCollectionRouteTrip={onCreateCollectionRouteTrip}
+              onCancelCollectionRouteEditor={onCancelCollectionRouteEditor}
               rowStyle={getRowStyle(row.id)}
               onStartResizeRow={onStartResizeRow}
               onResetRowHeight={onResetRowHeight}
@@ -2585,6 +3634,26 @@ export default function WorkflowPage() {
   const [editingCell, setEditingCell] = useState<WorkflowEditingCell | null>(null);
   const [editingValue, setEditingValue] = useState('');
   const [savingField, setSavingField] = useState(false);
+  const [collectionRouteEditor, setCollectionRouteEditor] =
+    useState<WorkflowCollectionEditorState | null>(null);
+  const [collectionRouteEditorLoading, setCollectionRouteEditorLoading] =
+    useState(false);
+  const [collectionRouteEditorSaving, setCollectionRouteEditorSaving] =
+    useState(false);
+  const [collectionRouteEditorMatchedTrip, setCollectionRouteEditorMatchedTrip] =
+    useState<WorkflowRouteTripOption | null>(null);
+  const [collectionRouteEditorManagers, setCollectionRouteEditorManagers] =
+    useState<ManagerOption[]>([]);
+  const [collectionRouteEditorWarehouses, setCollectionRouteEditorWarehouses] =
+    useState<OrganizationWarehouseOption[]>([]);
+  const [collectionRouteEditorLookupLoading, setCollectionRouteEditorLookupLoading] =
+    useState(false);
+  const [collectionRouteEditorErrors, setCollectionRouteEditorErrors] = useState<{
+    responsible_organization_id?: string;
+    responsible_warehouse_id?: string;
+    manager_user_ids?: string;
+    linked_trip_number?: string;
+  }>({});
 
   useEffect(() => {
     void fetchWorkflow();
@@ -2925,6 +3994,123 @@ export default function WorkflowPage() {
     void fetchWorkflow(selectedOrganizationId, selectedManagerUserId);
   }, [selectedManagerUserId, selectedOrganizationId, viewerIsElevated]);
 
+  useEffect(() => {
+    if (!collectionRouteEditor?.responsible_organization_id) {
+      setCollectionRouteEditorManagers([]);
+      setCollectionRouteEditorWarehouses([]);
+      return;
+    }
+
+    void fetchCollectionRouteManagers(collectionRouteEditor.responsible_organization_id);
+    void fetchCollectionRouteWarehouses(collectionRouteEditor.responsible_organization_id);
+  }, [collectionRouteEditor?.responsible_organization_id]);
+
+  useEffect(() => {
+    if (!collectionRouteEditor) {
+      setCollectionRouteEditorMatchedTrip(null);
+      setCollectionRouteEditorLookupLoading(false);
+      return;
+    }
+
+    const query = collectionRouteEditor.linked_trip_number.trim();
+
+    if (!query || !collectionRouteEditor.order_trip_link_id) {
+      setCollectionRouteEditorMatchedTrip(null);
+      setCollectionRouteEditorLookupLoading(false);
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void lookupCollectionRouteTrip(
+        collectionRouteEditor.order_trip_link_id,
+        query,
+        collectionRouteEditor.cargo_leg_id,
+        collectionRouteEditor.responsible_organization_id
+      );
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    collectionRouteEditor?.order_trip_link_id,
+    collectionRouteEditor?.cargo_leg_id,
+    collectionRouteEditor?.linked_trip_number,
+    collectionRouteEditor?.responsible_organization_id,
+  ]);
+
+  useEffect(() => {
+    if (!collectionRouteEditorMatchedTrip?.organization_id) {
+      return;
+    }
+
+    setCollectionRouteEditor((prev) => {
+      if (!prev) {
+        return prev;
+      }
+
+      if (prev.responsible_organization_id === collectionRouteEditorMatchedTrip.organization_id) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        responsible_organization_id: collectionRouteEditorMatchedTrip.organization_id || '',
+        responsible_warehouse_id: '',
+        manager_user_ids: [],
+        show_to_all_managers: false,
+      };
+    });
+    setCollectionRouteEditorErrors((prev) => ({
+      ...prev,
+      responsible_organization_id: undefined,
+      responsible_warehouse_id: undefined,
+      manager_user_ids: undefined,
+      linked_trip_number: undefined,
+    }));
+  }, [collectionRouteEditorMatchedTrip?.organization_id]);
+
+  useEffect(() => {
+    if (!collectionRouteEditorMatchedTrip?.created_by) {
+      return;
+    }
+
+    setCollectionRouteEditor((prev) => {
+      if (!prev) {
+        return prev;
+      }
+
+      if (
+        prev.show_to_all_managers ||
+        prev.manager_user_ids.length > 0 ||
+        !prev.responsible_organization_id
+      ) {
+        return prev;
+      }
+
+      const creatorIsSelectable = collectionRouteEditorManagers.some(
+        (manager) => manager.id === collectionRouteEditorMatchedTrip.created_by
+      );
+
+      if (!creatorIsSelectable) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        manager_user_ids: [collectionRouteEditorMatchedTrip.created_by!],
+      };
+    });
+    setCollectionRouteEditorErrors((prev) => ({
+      ...prev,
+      manager_user_ids: undefined,
+    }));
+  }, [
+    collectionRouteEditor?.manager_user_ids.length,
+    collectionRouteEditor?.responsible_organization_id,
+    collectionRouteEditor?.show_to_all_managers,
+    collectionRouteEditorManagers,
+    collectionRouteEditorMatchedTrip?.created_by,
+  ]);
+
   const fetchWorkflow = async (
     organizationId?: string,
     managerUserId?: string
@@ -3173,6 +4359,635 @@ export default function WorkflowPage() {
     }
   };
 
+  const resetCollectionRouteEditor = () => {
+    setCollectionRouteEditor(null);
+    setCollectionRouteEditorMatchedTrip(null);
+    setCollectionRouteEditorManagers([]);
+    setCollectionRouteEditorWarehouses([]);
+    setCollectionRouteEditorLookupLoading(false);
+    setCollectionRouteEditorErrors({});
+  };
+
+  const closeCollectionRouteEditor = () => {
+    if (collectionRouteEditorSaving || collectionRouteEditorLoading) {
+      return;
+    }
+
+    resetCollectionRouteEditor();
+  };
+
+  const updateCollectionRouteEditor = (
+    patch:
+      | Partial<WorkflowCollectionEditorState>
+      | ((prev: WorkflowCollectionEditorState) => WorkflowCollectionEditorState)
+  ) => {
+    setCollectionRouteEditor((prev) => {
+      if (!prev) {
+        return prev;
+      }
+
+      return typeof patch === 'function' ? patch(prev) : { ...prev, ...patch };
+    });
+  };
+
+  const openCollectionRouteEditor = async (
+    row: WorkflowStandaloneRow,
+    stepKey: WorkflowRouteEditorStepKey
+  ) => {
+    if (!row.order_id) {
+      return;
+    }
+
+    try {
+      setCollectionRouteEditorLoading(true);
+      setEditingCell(null);
+      setEditingValue('');
+
+      if (organizations.length === 0) {
+        await fetchOrganizations();
+      }
+
+      const searchParams = new URLSearchParams();
+      searchParams.set('orderId', row.order_id);
+
+      const res = await fetch(
+        `/api/orders/link-trip-options?${searchParams.toString()}`,
+        {
+          method: 'GET',
+        }
+      );
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to load route setup');
+        return;
+      }
+
+      const linkedTrips = (data.linked_trips || []) as WorkflowLinkedTripRow[];
+      const activeLinkedTrip =
+        linkedTrips.find((linkedTrip) => linkedTrip.trip_id === row.trip_id) ||
+        linkedTrips[0] ||
+        null;
+
+      if (!activeLinkedTrip?.link_id) {
+        toast.error('Link trip first for this order');
+        return;
+      }
+
+        const stepCargoLeg = findWorkflowRouteEditorCargoLeg(
+          activeLinkedTrip.cargo_legs || [],
+          stepKey
+        );
+        const stepDisplay = getWorkflowRouteStepDisplay(row, stepKey);
+        const storedMode = getWorkflowRouteEditorModeValue(row.route_plan, stepKey);
+        const initialMode =
+          stepCargoLeg || storedMode === getWorkflowRouteEditorRouteMode(stepKey)
+            ? getWorkflowRouteEditorRouteMode(stepKey)
+            : storedMode;
+
+      setCollectionRouteEditor({
+          row_id: row.id,
+          order_id: row.order_id,
+          trip_id: row.trip_id,
+          order_trip_link_id: activeLinkedTrip.link_id,
+          cargo_leg_id: stepCargoLeg?.id ?? stepDisplay?.cargo_leg_id ?? null,
+          existing_cargo_legs: activeLinkedTrip.cargo_legs || [],
+          step_key: stepKey,
+          mode: initialMode,
+        responsible_organization_id:
+          stepCargoLeg?.responsible_organization_id ||
+          stepCargoLeg?.linked_trip?.organization_id ||
+          '',
+        responsible_warehouse_id: stepCargoLeg?.responsible_warehouse_id || '',
+        manager_user_ids: (stepCargoLeg?.shared_managers || [])
+          .map((manager) => manager.id)
+          .filter((value): value is string => !!value),
+        show_to_all_managers: stepCargoLeg?.show_to_all_managers || false,
+        linked_trip_number:
+          stepCargoLeg?.linked_trip?.trip_number ||
+          (initialMode === getWorkflowRouteEditorRouteMode(stepKey) ? '' : ''),
+      });
+      setCollectionRouteEditorMatchedTrip(stepCargoLeg?.linked_trip || null);
+      setCollectionRouteEditorErrors({});
+    } catch (error) {
+      toast.error('Failed to load route setup');
+    } finally {
+      setCollectionRouteEditorLoading(false);
+    }
+  };
+
+  const validateCollectionRouteEditor = (editor: WorkflowCollectionEditorState) => {
+    const nextErrors: {
+      responsible_organization_id?: string;
+      responsible_warehouse_id?: string;
+      manager_user_ids?: string;
+      linked_trip_number?: string;
+    } = {};
+
+    if (editor.mode !== getWorkflowRouteEditorRouteMode(editor.step_key)) {
+      setCollectionRouteEditorErrors(nextErrors);
+      return Object.keys(nextErrors).length === 0;
+    }
+
+    if (!editor.responsible_organization_id) {
+      nextErrors.responsible_organization_id = 'Choose responsible organization';
+    }
+
+    if (!editor.show_to_all_managers && editor.manager_user_ids.length === 0) {
+      nextErrors.manager_user_ids = 'Choose manager or All';
+    }
+
+    if (!collectionRouteEditorMatchedTrip?.id) {
+      nextErrors.linked_trip_number = 'Choose existing collection trip or create a new one';
+    }
+
+    setCollectionRouteEditorErrors(nextErrors);
+
+    if (nextErrors.responsible_organization_id) {
+      toast.error(nextErrors.responsible_organization_id);
+      return false;
+    }
+
+    if (nextErrors.manager_user_ids) {
+      toast.error(nextErrors.manager_user_ids);
+      return false;
+    }
+
+    if (nextErrors.linked_trip_number) {
+      toast.error(nextErrors.linked_trip_number);
+      return false;
+    }
+
+    return true;
+  };
+
+  const applyRoutePlanUpdateLocally = (
+    orderId: string,
+    routePlanUpdate: WorkflowRoutePlanUpdateResponse
+  ) => {
+    setGroupageGroups((prev) =>
+      prev.map((group) => ({
+        ...group,
+        rows: group.rows.map((row) =>
+          row.order_id === orderId
+            ? applyRoutePlanToStandaloneRow(
+                row,
+                mergeWorkflowRoutePlanForClient(row.route_plan, routePlanUpdate)
+              )
+            : row
+        ),
+      }))
+    );
+    setStandaloneRows((prev) =>
+      prev.map((row) =>
+        row.order_id === orderId
+          ? applyRoutePlanToStandaloneRow(
+              row,
+              mergeWorkflowRoutePlanForClient(row.route_plan, routePlanUpdate)
+            )
+          : row
+      )
+    );
+  };
+
+  const saveCollectionRouteEditor = async () => {
+    if (!collectionRouteEditor || collectionRouteEditorSaving) {
+      return;
+    }
+
+    if (!validateCollectionRouteEditor(collectionRouteEditor)) {
+      return;
+    }
+
+    try {
+      setCollectionRouteEditorSaving(true);
+      const editor = collectionRouteEditor;
+
+      const currentRoutePlan = findCurrentRoutePlan(editor.order_id);
+      const routePlanPayload = buildWorkflowRoutePlanUpdatePayload(
+        currentRoutePlan,
+        editor.step_key,
+        editor.mode
+      );
+      const routePlanRes = await fetch('/api/workflow/route-plan/update', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          order_id: editor.order_id,
+          ...routePlanPayload,
+        }),
+      });
+
+      const routePlanData = await routePlanRes.json();
+
+      if (!routePlanRes.ok) {
+        toast.error(routePlanData.error || 'Failed to save collection plan');
+        return;
+      }
+
+      const routePlanUpdate =
+        routePlanData.route_plan as WorkflowRoutePlanUpdateResponse | undefined;
+
+      const latestLinkedTripsRes = await fetch(
+        `/api/orders/link-trip-options?orderId=${encodeURIComponent(editor.order_id)}`,
+        {
+          method: 'GET',
+        }
+      );
+
+      const latestLinkedTripsData = await latestLinkedTripsRes.json();
+
+      const latestLinkedTrips = latestLinkedTripsRes.ok
+        ? ((latestLinkedTripsData.linked_trips || []) as WorkflowLinkedTripRow[])
+        : [];
+      const latestActiveLinkedTrip =
+        latestLinkedTrips.find((linkedTrip) => linkedTrip.link_id === editor.order_trip_link_id) ||
+        latestLinkedTrips.find((linkedTrip) => linkedTrip.trip_id === editor.trip_id) ||
+        latestLinkedTrips[0] ||
+        null;
+      const latestExistingCargoLegs = latestActiveLinkedTrip?.cargo_legs || editor.existing_cargo_legs;
+      const latestStepCargoLeg =
+        findWorkflowRouteEditorCargoLeg(latestExistingCargoLegs, editor.step_key) || null;
+      const resolvedCargoLegId = latestStepCargoLeg?.id || editor.cargo_leg_id || null;
+      const resolvedLinkedTrip =
+        collectionRouteEditorMatchedTrip || latestStepCargoLeg?.linked_trip || null;
+
+      if (editor.mode !== getWorkflowRouteEditorRouteMode(editor.step_key)) {
+        if (resolvedCargoLegId) {
+            const deleteRouteRes = await fetch('/api/cargo-legs/delete', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                id: resolvedCargoLegId,
+              }),
+            });
+
+            const deleteRouteData = await deleteRouteRes.json();
+
+            if (!deleteRouteRes.ok) {
+              toast.error(
+                deleteRouteData.error ||
+                  `Failed to remove ${getWorkflowRouteEditorLabel(collectionRouteEditor.step_key).toLowerCase()} route`
+              );
+              return;
+            }
+          }
+
+          if (routePlanUpdate) {
+            applyRoutePlanUpdateLocally(editor.order_id, routePlanUpdate);
+          }
+
+        toast.success(`${getWorkflowRouteEditorLabel(editor.step_key)} plan updated`);
+        resetCollectionRouteEditor();
+        void fetchWorkflow(
+          buildReloadParams().organizationId,
+          buildReloadParams().managerUserId
+        );
+        return;
+      }
+
+      if (!resolvedLinkedTrip?.id) {
+        toast.error(`Choose existing ${getWorkflowRouteEditorLabel(editor.step_key).toLowerCase()} trip or create a new one`);
+        return;
+      }
+
+      const cargoLegPayload = {
+        order_trip_link_id: editor.order_trip_link_id,
+        linked_trip_id: resolvedLinkedTrip.id,
+        responsible_organization_id: editor.responsible_organization_id,
+        responsible_warehouse_id:
+          editor.responsible_warehouse_id || null,
+        manager_user_ids: editor.manager_user_ids,
+        show_to_all_managers: editor.show_to_all_managers,
+        leg_order: resolvedCargoLegId
+          ? latestExistingCargoLegs.find(
+              (cargoLeg) => cargoLeg.id === resolvedCargoLegId
+            )?.leg_order ||
+            getSuggestedWorkflowCargoLegOrderForStep(
+              editor.step_key,
+              latestExistingCargoLegs
+            )
+          : getSuggestedWorkflowCargoLegOrderForStep(
+              editor.step_key,
+              latestExistingCargoLegs
+            ),
+        leg_type: getWorkflowRouteEditorLegType(editor.step_key),
+      };
+
+      let routeStepRes = await fetch(
+        resolvedCargoLegId
+          ? '/api/cargo-legs/update'
+          : '/api/cargo-legs/create',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(
+            resolvedCargoLegId
+              ? { id: resolvedCargoLegId, ...cargoLegPayload }
+              : cargoLegPayload
+          ),
+        }
+      );
+
+      let routeStepData = await routeStepRes.json();
+
+      if (
+        !routeStepRes.ok &&
+        !resolvedCargoLegId &&
+        routeStepData?.error === 'This cargo leg order already exists for the cargo'
+      ) {
+        const duplicateLinkedTripsRes = await fetch(
+          `/api/orders/link-trip-options?orderId=${encodeURIComponent(editor.order_id)}`,
+          {
+            method: 'GET',
+          }
+        );
+        const duplicateLinkedTripsData = await duplicateLinkedTripsRes.json();
+        const duplicateLinkedTrips = duplicateLinkedTripsRes.ok
+          ? ((duplicateLinkedTripsData.linked_trips || []) as WorkflowLinkedTripRow[])
+          : [];
+        const duplicateActiveLinkedTrip =
+          duplicateLinkedTrips.find((linkedTrip) => linkedTrip.link_id === editor.order_trip_link_id) ||
+          duplicateLinkedTrips.find((linkedTrip) => linkedTrip.trip_id === editor.trip_id) ||
+          duplicateLinkedTrips[0] ||
+          null;
+        const duplicateExistingCargoLegs = duplicateActiveLinkedTrip?.cargo_legs || [];
+        const duplicateStepCargoLeg =
+          findWorkflowRouteEditorCargoLeg(duplicateExistingCargoLegs, editor.step_key) || null;
+
+        if (duplicateStepCargoLeg?.id) {
+          routeStepRes = await fetch('/api/cargo-legs/update', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              id: duplicateStepCargoLeg.id,
+              ...cargoLegPayload,
+              leg_order: duplicateStepCargoLeg.leg_order,
+            }),
+          });
+          routeStepData = await routeStepRes.json();
+        } else {
+          const desiredLegOrder = getSuggestedWorkflowCargoLegOrderForStep(
+            editor.step_key,
+            duplicateExistingCargoLegs
+          );
+          const legsToShift = duplicateExistingCargoLegs
+            .filter((cargoLeg) => cargoLeg.leg_order >= desiredLegOrder)
+            .sort((left, right) => right.leg_order - left.leg_order);
+
+          let shiftError: string | null = null;
+
+          for (const cargoLeg of legsToShift) {
+            const shiftRes = await fetch('/api/cargo-legs/update', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                id: cargoLeg.id,
+                leg_order: cargoLeg.leg_order + 1,
+              }),
+            });
+
+            const shiftData = await shiftRes.json();
+
+            if (!shiftRes.ok) {
+              shiftError =
+                shiftData.error || 'Failed to reorder existing cargo route steps';
+              break;
+            }
+          }
+
+          if (shiftError) {
+            routeStepData = { error: shiftError };
+          } else {
+            routeStepRes = await fetch('/api/cargo-legs/create', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                ...cargoLegPayload,
+                leg_order: desiredLegOrder,
+              }),
+            });
+            routeStepData = await routeStepRes.json();
+          }
+        }
+      }
+
+      if (!routeStepRes.ok) {
+        toast.error(
+          routeStepData.error ||
+            `Failed to save ${getWorkflowRouteEditorLabel(editor.step_key).toLowerCase()} route`
+        );
+        return;
+      }
+
+      if (routePlanUpdate) {
+        applyRoutePlanUpdateLocally(editor.order_id, routePlanUpdate);
+      }
+
+      toast.success(`${getWorkflowRouteEditorLabel(editor.step_key)} route saved`);
+      resetCollectionRouteEditor();
+      void fetchWorkflow(
+        buildReloadParams().organizationId,
+        buildReloadParams().managerUserId
+      );
+    } catch (error) {
+      toast.error(
+        `Failed to save ${getWorkflowRouteEditorLabel(collectionRouteEditor.step_key).toLowerCase()} route`
+      );
+    } finally {
+      setCollectionRouteEditorSaving(false);
+    }
+  };
+
+  const createCollectionRouteTrip = async () => {
+    if (!collectionRouteEditor || collectionRouteEditorSaving) {
+      return;
+    }
+
+    const editor = collectionRouteEditor;
+    const nextShowToAll =
+      editor.show_to_all_managers || editor.manager_user_ids.length === 0;
+
+    if (!editor.responsible_organization_id) {
+      setCollectionRouteEditorErrors((prev) => ({
+        ...prev,
+        responsible_organization_id: 'Choose responsible organization',
+      }));
+      toast.error('Choose responsible organization');
+      return;
+    }
+
+    try {
+      setCollectionRouteEditorSaving(true);
+
+      const latestLinkedTripsRes = await fetch(
+        `/api/orders/link-trip-options?orderId=${encodeURIComponent(editor.order_id)}`,
+        {
+          method: 'GET',
+        }
+      );
+      const latestLinkedTripsData = await latestLinkedTripsRes.json();
+      const latestLinkedTrips = latestLinkedTripsRes.ok
+        ? ((latestLinkedTripsData.linked_trips || []) as WorkflowLinkedTripRow[])
+        : [];
+      const latestActiveLinkedTrip =
+        latestLinkedTrips.find((linkedTrip) => linkedTrip.link_id === editor.order_trip_link_id) ||
+        latestLinkedTrips.find((linkedTrip) => linkedTrip.trip_id === editor.trip_id) ||
+        latestLinkedTrips[0] ||
+        null;
+      const latestExistingCargoLegs =
+        latestActiveLinkedTrip?.cargo_legs || editor.existing_cargo_legs;
+      const latestStepCargoLeg =
+        findWorkflowRouteEditorCargoLeg(latestExistingCargoLegs, editor.step_key) || null;
+      const resolvedCargoLegId = latestStepCargoLeg?.id || editor.cargo_leg_id || null;
+      const desiredLegOrder = resolvedCargoLegId
+        ? latestExistingCargoLegs.find((cargoLeg) => cargoLeg.id === resolvedCargoLegId)
+            ?.leg_order ||
+          getSuggestedWorkflowCargoLegOrderForStep(editor.step_key, latestExistingCargoLegs)
+        : getSuggestedWorkflowCargoLegOrderForStep(editor.step_key, latestExistingCargoLegs);
+
+      if (!resolvedCargoLegId) {
+        const legsToShift = latestExistingCargoLegs
+          .filter((cargoLeg) => cargoLeg.leg_order >= desiredLegOrder)
+          .sort((left, right) => right.leg_order - left.leg_order);
+
+        for (const cargoLeg of legsToShift) {
+          const shiftRes = await fetch('/api/cargo-legs/update', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              id: cargoLeg.id,
+              leg_order: cargoLeg.leg_order + 1,
+            }),
+          });
+
+          const shiftData = await shiftRes.json();
+
+          if (!shiftRes.ok) {
+            toast.error(
+              shiftData.error || 'Failed to reorder existing cargo route steps'
+            );
+            return;
+          }
+        }
+      }
+
+      let res = await fetch('/api/cargo-legs/create-linked-trip', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          order_trip_link_id: editor.order_trip_link_id,
+          cargo_leg_id: resolvedCargoLegId,
+          responsible_organization_id: editor.responsible_organization_id,
+          responsible_warehouse_id: editor.responsible_warehouse_id || null,
+          manager_user_ids: editor.manager_user_ids,
+          show_to_all_managers: nextShowToAll,
+          leg_order: desiredLegOrder,
+          leg_type: getWorkflowRouteEditorLegType(editor.step_key),
+        }),
+      });
+
+      let data = await res.json();
+
+      if (
+        !res.ok &&
+        !resolvedCargoLegId &&
+        data?.error === 'This cargo leg order already exists for the cargo'
+      ) {
+        const duplicateLinkedTripsRes = await fetch(
+          `/api/orders/link-trip-options?orderId=${encodeURIComponent(editor.order_id)}`,
+          {
+            method: 'GET',
+          }
+        );
+        const duplicateLinkedTripsData = await duplicateLinkedTripsRes.json();
+        const duplicateLinkedTrips = duplicateLinkedTripsRes.ok
+          ? ((duplicateLinkedTripsData.linked_trips || []) as WorkflowLinkedTripRow[])
+          : [];
+        const duplicateActiveLinkedTrip =
+          duplicateLinkedTrips.find((linkedTrip) => linkedTrip.link_id === editor.order_trip_link_id) ||
+          duplicateLinkedTrips.find((linkedTrip) => linkedTrip.trip_id === editor.trip_id) ||
+          duplicateLinkedTrips[0] ||
+          null;
+        const duplicateExistingCargoLegs = duplicateActiveLinkedTrip?.cargo_legs || [];
+        const duplicateStepCargoLeg =
+          findWorkflowRouteEditorCargoLeg(duplicateExistingCargoLegs, editor.step_key) || null;
+
+        if (duplicateStepCargoLeg?.id) {
+          res = await fetch('/api/cargo-legs/create-linked-trip', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              order_trip_link_id: editor.order_trip_link_id,
+              cargo_leg_id: duplicateStepCargoLeg.id,
+              responsible_organization_id: editor.responsible_organization_id,
+              responsible_warehouse_id: editor.responsible_warehouse_id || null,
+              manager_user_ids: editor.manager_user_ids,
+              show_to_all_managers: nextShowToAll,
+              leg_order: duplicateStepCargoLeg.leg_order,
+              leg_type: getWorkflowRouteEditorLegType(editor.step_key),
+            }),
+          });
+          data = await res.json();
+        }
+      }
+
+      if (!res.ok) {
+        toast.error(
+          data.error ||
+            `Failed to create ${getWorkflowRouteEditorLabel(editor.step_key).toLowerCase()} trip`
+        );
+        return;
+      }
+
+      const createdTrip = data.created_trip as { trip_number?: string } | undefined;
+      const createdCargoLeg = data.cargo_leg as WorkflowCargoLegRow | undefined;
+
+      setCollectionRouteEditor((prev) =>
+        prev
+          ? {
+              ...prev,
+              cargo_leg_id: createdCargoLeg?.id || prev.cargo_leg_id,
+              show_to_all_managers: nextShowToAll,
+              linked_trip_number: createdTrip?.trip_number || prev.linked_trip_number,
+            }
+          : prev
+      );
+      setCollectionRouteEditorMatchedTrip(
+        createdCargoLeg?.linked_trip || collectionRouteEditorMatchedTrip
+      );
+      setCollectionRouteEditorErrors({});
+      toast.success(
+        `${getWorkflowRouteEditorLabel(editor.step_key)} trip created: ${createdTrip?.trip_number || ''}`.trim()
+      );
+    } catch (error) {
+      toast.error(
+        `Failed to create ${getWorkflowRouteEditorLabel(editor.step_key).toLowerCase()} trip`
+      );
+    } finally {
+      setCollectionRouteEditorSaving(false);
+    }
+  };
+
   const startEditingCell = (
     cell: WorkflowEditingCell,
     initialValue: string | null | undefined
@@ -3382,6 +5197,99 @@ export default function WorkflowPage() {
       setSelectedManagerUserId('');
     } finally {
       setLoadingManagers(false);
+    }
+  };
+
+  const fetchCollectionRouteManagers = async (organizationId: string) => {
+    try {
+      const res = await fetch(
+        `/api/organization/managers?organizationId=${encodeURIComponent(organizationId)}`,
+        {
+          method: 'GET',
+        }
+      );
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to load route managers');
+        setCollectionRouteEditorManagers([]);
+        return;
+      }
+
+      setCollectionRouteEditorManagers(data.managers || []);
+    } catch (error) {
+      toast.error('Failed to load route managers');
+      setCollectionRouteEditorManagers([]);
+    }
+  };
+
+  const fetchCollectionRouteWarehouses = async (organizationId: string) => {
+    try {
+      const res = await fetch(
+        `/api/organizations/warehouses?organizationId=${encodeURIComponent(organizationId)}`,
+        {
+          method: 'GET',
+        }
+      );
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to load warehouses');
+        setCollectionRouteEditorWarehouses([]);
+        return;
+      }
+
+      setCollectionRouteEditorWarehouses(data.warehouses || []);
+    } catch (error) {
+      toast.error('Failed to load warehouses');
+      setCollectionRouteEditorWarehouses([]);
+    }
+  };
+
+  const lookupCollectionRouteTrip = async (
+    orderTripLinkId: string,
+    query: string,
+    cargoLegId?: string | null,
+    responsibleOrganizationId?: string | null
+  ) => {
+    try {
+      setCollectionRouteEditorLookupLoading(true);
+
+      const searchParams = new URLSearchParams();
+      searchParams.set('orderTripLinkId', orderTripLinkId);
+      searchParams.set('q', query.trim().toUpperCase());
+
+      if (cargoLegId) {
+        searchParams.set('cargoLegId', cargoLegId);
+      }
+
+      if (responsibleOrganizationId) {
+        searchParams.set('responsibleOrganizationId', responsibleOrganizationId);
+      }
+
+      const res = await fetch(
+        `/api/cargo-legs/trip-options?${searchParams.toString()}`,
+        {
+          method: 'GET',
+        }
+      );
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to look up trip');
+        setCollectionRouteEditorMatchedTrip(null);
+        return;
+      }
+
+      setCollectionRouteEditorMatchedTrip(data.matched_trip || null);
+    } catch (error) {
+      toast.error('Failed to look up trip');
+      setCollectionRouteEditorMatchedTrip(null);
+    } finally {
+      setCollectionRouteEditorLookupLoading(false);
     }
   };
 
@@ -3893,6 +5801,20 @@ export default function WorkflowPage() {
                 onChangeEditingValue={setEditingValue}
                 onSubmitEdit={submitEditingCell}
                 onCancelEdit={cancelEditingCell}
+                collectionRouteEditor={collectionRouteEditor}
+                collectionRouteEditorOrganizations={organizations}
+                collectionRouteEditorManagers={collectionRouteEditorManagers}
+                collectionRouteEditorWarehouses={collectionRouteEditorWarehouses}
+                collectionRouteEditorMatchedTrip={collectionRouteEditorMatchedTrip}
+                collectionRouteEditorLoading={collectionRouteEditorLoading}
+                collectionRouteEditorSaving={collectionRouteEditorSaving}
+                collectionRouteEditorLookupLoading={collectionRouteEditorLookupLoading}
+                collectionRouteEditorErrors={collectionRouteEditorErrors}
+                onOpenCollectionRouteEditor={openCollectionRouteEditor}
+                onChangeCollectionRouteEditor={updateCollectionRouteEditor}
+                onSaveCollectionRouteEditor={saveCollectionRouteEditor}
+                onCreateCollectionRouteTrip={createCollectionRouteTrip}
+                onCancelCollectionRouteEditor={closeCollectionRouteEditor}
               />
             ))}
 
@@ -3938,6 +5860,20 @@ export default function WorkflowPage() {
                         onChangeEditingValue={setEditingValue}
                         onSubmitEdit={submitEditingCell}
                         onCancelEdit={cancelEditingCell}
+                        collectionRouteEditor={collectionRouteEditor}
+                        collectionRouteEditorOrganizations={organizations}
+                        collectionRouteEditorManagers={collectionRouteEditorManagers}
+                        collectionRouteEditorWarehouses={collectionRouteEditorWarehouses}
+                        collectionRouteEditorMatchedTrip={collectionRouteEditorMatchedTrip}
+                        collectionRouteEditorLoading={collectionRouteEditorLoading}
+                        collectionRouteEditorSaving={collectionRouteEditorSaving}
+                        collectionRouteEditorLookupLoading={collectionRouteEditorLookupLoading}
+                        collectionRouteEditorErrors={collectionRouteEditorErrors}
+                        onOpenCollectionRouteEditor={openCollectionRouteEditor}
+                        onChangeCollectionRouteEditor={updateCollectionRouteEditor}
+                        onSaveCollectionRouteEditor={saveCollectionRouteEditor}
+                        onCreateCollectionRouteTrip={createCollectionRouteTrip}
+                        onCancelCollectionRouteEditor={closeCollectionRouteEditor}
                         rowStyle={getRowStyle(row.id)}
                         onStartResizeRow={startRowHeightResize}
                         onResetRowHeight={resetRowHeight}
@@ -3950,6 +5886,24 @@ export default function WorkflowPage() {
           </>
         )}
       </div>
+
+      {collectionRouteEditor ? (
+        <WorkflowCollectionRouteEditorOverlay
+          editor={collectionRouteEditor}
+          organizations={organizations}
+          managers={collectionRouteEditorManagers}
+          warehouses={collectionRouteEditorWarehouses}
+          matchedTrip={collectionRouteEditorMatchedTrip}
+          loading={collectionRouteEditorLoading}
+          saving={collectionRouteEditorSaving}
+          lookupLoading={collectionRouteEditorLookupLoading}
+          errors={collectionRouteEditorErrors}
+          onChange={updateCollectionRouteEditor}
+          onSave={saveCollectionRouteEditor}
+          onCreateTrip={createCollectionRouteTrip}
+          onCancel={closeCollectionRouteEditor}
+        />
+      ) : null}
     </div>
   );
 }

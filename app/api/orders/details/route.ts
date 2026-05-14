@@ -10,6 +10,7 @@ import {
 import { canAccessOrderViaCargoRoute } from '@/lib/server/cargo-legs';
 import { loadWorkflowFieldUpdates } from '@/lib/server/workflow-field-updates';
 import { loadWorkflowRoutePlans } from '@/lib/server/workflow-route-plans';
+import { parseWorkflowScheduleValueText } from '@/lib/utils/workflow-schedule';
 
 function parseWorkflowNumericValue(value: string | null | undefined) {
   if (!value) {
@@ -209,6 +210,8 @@ export async function GET(req: NextRequest) {
     const kgOverride = getWorkflowValue('kg');
     const ldmOverride = getWorkflowValue('ldm');
     const revenueOverride = getWorkflowValue('revenue');
+    const prepOverride = getWorkflowValue('prep');
+    const deliveryOverride = getWorkflowValue('delivery');
 
     const orderPayload: any = {
       ...(data as any),
@@ -281,6 +284,13 @@ export async function GET(req: NextRequest) {
       orderPayload.shipper_name = senderOverride;
     }
 
+    if (prepOverride !== null) {
+      const schedule = parseWorkflowScheduleValueText(prepOverride);
+      orderPayload.loading_date = schedule?.date ?? null;
+      orderPayload.loading_time_from = schedule?.time_from ?? null;
+      orderPayload.loading_time_to = schedule?.time_to ?? null;
+    }
+
     if (loadingOverride !== null) {
       orderPayload.loading_address = loadingOverride;
       orderPayload.loading_city = null;
@@ -297,6 +307,13 @@ export async function GET(req: NextRequest) {
     const receiverOverride = getWorkflowValue('receiver');
     if (receiverOverride !== null) {
       orderPayload.consignee_name = receiverOverride;
+    }
+
+    if (deliveryOverride !== null) {
+      const schedule = parseWorkflowScheduleValueText(deliveryOverride);
+      orderPayload.unloading_date = schedule?.date ?? null;
+      orderPayload.unloading_time_from = schedule?.time_from ?? null;
+      orderPayload.unloading_time_to = schedule?.time_to ?? null;
     }
 
     if (unloadingOverride !== null) {

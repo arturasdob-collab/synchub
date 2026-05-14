@@ -262,12 +262,18 @@ export async function POST(req: Request) {
       !showToAllManagers && normalizedManagerUserIds.length === 1
         ? normalizedManagerUserIds[0]
         : null;
+    const fallbackTripManagerUserId =
+      !showToAllManagers && responsibleOrganizationId === sourceOrganizationId
+        ? tripSharedManagerUserId
+        : null;
+    const nextTripManagerUserId =
+      singleRouteManagerUserId || fallbackTripManagerUserId;
 
-    if (singleRouteManagerUserId || tripSharedManagerUserId) {
+    if (nextTripManagerUserId) {
       await replaceTripManagerShare(serviceSupabase, {
         organizationId: responsibleOrganizationId,
         tripId: createdTrip.id,
-        managerUserId: singleRouteManagerUserId || tripSharedManagerUserId,
+        managerUserId: nextTripManagerUserId,
         sharedOrganizationId: responsibleOrganizationId,
         sharedBy:
           responsibleOrganizationId === sourceOrganizationId ? user.id : null,

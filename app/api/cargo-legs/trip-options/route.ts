@@ -14,6 +14,7 @@ function mapTripOption(trip: any) {
 
   return {
     id: trip.id,
+    organization_id: trip.organization_id ?? null,
     trip_number: trip.trip_number,
     status: trip.status ?? null,
     driver_name: trip.driver_name ?? null,
@@ -92,7 +93,7 @@ export async function GET(req: NextRequest) {
       orderTripLinkId
     );
 
-    let effectiveOrganizationId = requestedResponsibleOrganizationId || profile.organization_id;
+    let effectiveOrganizationId = requestedResponsibleOrganizationId || null;
 
     if (cargoLegId) {
       const { data: existingCargoLeg, error: existingCargoLegError } =
@@ -123,7 +124,7 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const { data: matchedTrip, error: matchedTripError } = await serviceSupabase
+    let matchedTripQuery = serviceSupabase
       .from('trips')
       .select(
         `
@@ -146,9 +147,13 @@ export async function GET(req: NextRequest) {
           )
         `
       )
-      .eq('organization_id', effectiveOrganizationId)
-      .eq('trip_number', tripNumberQuery)
-      .maybeSingle();
+      .eq('trip_number', tripNumberQuery);
+
+    if (effectiveOrganizationId) {
+      matchedTripQuery = matchedTripQuery.eq('organization_id', effectiveOrganizationId);
+    }
+
+    const { data: matchedTrip, error: matchedTripError } = await matchedTripQuery.maybeSingle();
 
     if (matchedTripError) {
       return NextResponse.json({ error: matchedTripError.message }, { status: 500 });

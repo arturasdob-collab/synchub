@@ -22,6 +22,11 @@ import {
   loadWorkflowRoutePlans,
   mergeWorkflowRoutePlan,
 } from '@/lib/server/workflow-route-plans';
+import {
+  buildWorkflowScheduleValue,
+  formatWorkflowScheduleSummary,
+  parseWorkflowScheduleValueText,
+} from '@/lib/utils/workflow-schedule';
 
 type ServiceSupabase = any;
 
@@ -133,35 +138,6 @@ function formatExtraInfo(parts: Array<string | null | undefined>) {
     .filter((value) => value !== '');
 
   return normalized.length > 0 ? normalized.join(' / ') : '-';
-}
-
-function formatScheduleSummary(params: {
-  date: string | null | undefined;
-  timeFrom: string | null | undefined;
-  timeTo: string | null | undefined;
-}) {
-  const date = typeof params.date === 'string' ? params.date.trim() : '';
-  const timeFrom =
-    typeof params.timeFrom === 'string' ? params.timeFrom.trim() : '';
-  const timeTo = typeof params.timeTo === 'string' ? params.timeTo.trim() : '';
-
-  if (!date) {
-    return '-';
-  }
-
-  if (timeFrom && timeTo) {
-    return `${date} ${timeFrom}-${timeTo}`;
-  }
-
-  if (timeFrom) {
-    return `${date} ${timeFrom}`;
-  }
-
-  if (timeTo) {
-    return `${date} -${timeTo}`;
-  }
-
-  return date;
 }
 
 function formatPerson(
@@ -456,7 +432,14 @@ async function loadCargoLegTypesByOrderTripLinkId(
 ) {
   const cargoLegsByOrderTripLinkId = new Map<
     string,
-    Array<{ leg_order: number | null; leg_type: string }>
+    Array<{
+      id: string;
+      leg_order: number | null;
+      leg_type: string;
+      responsible_organization_name: string | null;
+      responsible_warehouse_name: string | null;
+      linked_trip_number: string | null;
+    }>
   >();
 
   if (orderTripLinkIds.length === 0) {
@@ -465,7 +448,23 @@ async function loadCargoLegTypesByOrderTripLinkId(
 
   const { data, error } = await serviceSupabase
     .from('cargo_legs')
-    .select('order_trip_link_id, leg_order, leg_type')
+    .select(
+      `
+      id,
+      order_trip_link_id,
+      leg_order,
+      leg_type,
+      responsible_organization:responsible_organization_id (
+        name
+      ),
+      responsible_warehouse:responsible_warehouse_id (
+        name
+      ),
+      linked_trip:linked_trip_id (
+        trip_number
+      )
+    `
+    )
     .in('order_trip_link_id', orderTripLinkIds);
 
   if (error) {
@@ -473,23 +472,120 @@ async function loadCargoLegTypesByOrderTripLinkId(
   }
 
   for (const row of data || []) {
-    if (!(row as any).order_trip_link_id || typeof (row as any).leg_type !== 'string') {
+    if (
+      !(row as any).id ||
+      !(row as any).order_trip_link_id ||
+      typeof (row as any).leg_type !== 'string'
+    ) {
       continue;
     }
 
     const key = (row as any).order_trip_link_id as string;
     const current = cargoLegsByOrderTripLinkId.get(key) || [];
+    const responsibleOrganization = Array.isArray((row as any).responsible_organization)
+      ? (row as any).responsible_organization[0] ?? null
+      : (row as any).responsible_organization;
+    const responsibleWarehouse = Array.isArray((row as any).responsible_warehouse)
+      ? (row as any).responsible_warehouse[0] ?? null
+      : (row as any).responsible_warehouse;
+    const linkedTrip = Array.isArray((row as any).linked_trip)
+      ? (row as any).linked_trip[0] ?? null
+      : (row as any).linked_trip;
     current.push({
+      id: (row as any).id as string,
       leg_order:
         typeof (row as any).leg_order === 'number' && Number.isFinite((row as any).leg_order)
           ? ((row as any).leg_order as number)
           : null,
       leg_type: (row as any).leg_type as string,
+      responsible_organization_name:
+        typeof responsibleOrganization?.name === 'string' ? responsibleOrganization.name : null,
+      responsible_warehouse_name:
+        typeof responsibleWarehouse?.name === 'string' ? responsibleWarehouse.name : null,
+      linked_trip_number:
+        typeof linkedTrip?.trip_number === 'string' ? linkedTrip.trip_number : null,
     });
     cargoLegsByOrderTripLinkId.set(key, current);
   }
 
   return cargoLegsByOrderTripLinkId;
+}
+
+function buildRouteStepSummary(step: {
+  responsible_organization_name: string | null;
+  responsible_warehouse_name: string | null;
+  linked_trip_number: string | null;
+}) {
+  const location = step.responsible_warehouse_name || step.responsible_organization_name || '-';
+  const trip = step.linked_trip_number || '-';
+  return `${location} / ${trip}`;
+}
+
+function buildWorkflowRouteStepDisplayMap(
+  cargoLegs: Array<{
+    id: string;
+    leg_order: number | null;
+    leg_type: string;
+    responsible_organization_name: string | null;
+    responsible_warehouse_name: string | null;
+    linked_trip_number: string | null;
+  }>
+) {
+  const sortedLegs = [...cargoLegs].sort(
+    (left, right) =>
+      (typeof left.leg_order === 'number' ? left.leg_order : Number.MAX_SAFE_INTEGER) -
+      (typeof right.leg_order === 'number' ? right.leg_order : Number.MAX_SAFE_INTEGER)
+  );
+  const internationalIndex = sortedLegs.findIndex(
+    (cargoLeg) => cargoLeg.leg_type === 'international_trip'
+  );
+  const collectionLeg =
+    sortedLegs.find((cargoLeg) => cargoLeg.leg_type === 'collection') || null;
+  const reloadingBeforeLeg =
+    internationalIndex >= 0
+      ? sortedLegs.find(
+          (cargoLeg, index) => cargoLeg.leg_type === 'reloading' && index < internationalIndex
+        ) || null
+      : sortedLegs.find((cargoLeg) => cargoLeg.leg_type === 'reloading') || null;
+  const reloadingAfterLeg =
+    internationalIndex >= 0
+      ? sortedLegs.find(
+          (cargoLeg, index) => cargoLeg.leg_type === 'reloading' && index > internationalIndex
+        ) || null
+      : null;
+  const distributionLeg =
+    internationalIndex >= 0
+      ? sortedLegs.find(
+          (cargoLeg, index) => cargoLeg.leg_type === 'delivery' && index > internationalIndex
+        ) || null
+      : sortedLegs.find((cargoLeg) => cargoLeg.leg_type === 'delivery') || null;
+
+  const createDisplay = (
+    cargoLeg:
+      | {
+          id: string;
+          responsible_organization_name: string | null;
+          responsible_warehouse_name: string | null;
+          linked_trip_number: string | null;
+        }
+      | null
+  ) =>
+    cargoLeg
+      ? {
+          cargo_leg_id: cargoLeg.id,
+          organization_name: cargoLeg.responsible_organization_name,
+          warehouse_name: cargoLeg.responsible_warehouse_name,
+          linked_trip_number: cargoLeg.linked_trip_number,
+          summary: buildRouteStepSummary(cargoLeg),
+        }
+      : null;
+
+  return {
+    collection: createDisplay(collectionLeg),
+    reloading_before: createDisplay(reloadingBeforeLeg),
+    reloading_after: createDisplay(reloadingAfterLeg),
+    distribution: createDisplay(distributionLeg),
+  };
 }
 
 function buildOrderRow(params: {
@@ -508,6 +604,36 @@ function buildOrderRow(params: {
     international_trip_id: string | null;
     international_trip_number: string | null;
     setup_status: string;
+  } | null;
+  routeSteps?: {
+    collection: {
+      cargo_leg_id: string;
+      organization_name: string | null;
+      warehouse_name: string | null;
+      linked_trip_number: string | null;
+      summary: string;
+    } | null;
+    reloading_before: {
+      cargo_leg_id: string;
+      organization_name: string | null;
+      warehouse_name: string | null;
+      linked_trip_number: string | null;
+      summary: string;
+    } | null;
+    reloading_after: {
+      cargo_leg_id: string;
+      organization_name: string | null;
+      warehouse_name: string | null;
+      linked_trip_number: string | null;
+      summary: string;
+    } | null;
+    distribution: {
+      cargo_leg_id: string;
+      organization_name: string | null;
+      warehouse_name: string | null;
+      linked_trip_number: string | null;
+      summary: string;
+    } | null;
   } | null;
 }) {
   const {
@@ -554,17 +680,25 @@ function buildOrderRow(params: {
     trip_id: linkedTrip?.id ?? null,
     status: order.status ?? null,
     prep_date: order.loading_date ?? null,
-    prep_display: formatScheduleSummary({
-      date: order.loading_date,
-      timeFrom: order.loading_time_from,
-      timeTo: order.loading_time_to,
-    }),
+    prep_time_from: order.loading_time_from ?? null,
+    prep_time_to: order.loading_time_to ?? null,
+    prep_display: formatWorkflowScheduleSummary(
+      buildWorkflowScheduleValue({
+        date: order.loading_date,
+        time_from: order.loading_time_from,
+        time_to: order.loading_time_to,
+      })
+    ),
     delivery_date: order.unloading_date ?? null,
-    delivery_display: formatScheduleSummary({
-      date: order.unloading_date,
-      timeFrom: order.unloading_time_from,
-      timeTo: order.unloading_time_to,
-    }),
+    delivery_time_from: order.unloading_time_from ?? null,
+    delivery_time_to: order.unloading_time_to ?? null,
+    delivery_display: formatWorkflowScheduleSummary(
+      buildWorkflowScheduleValue({
+        date: order.unloading_date,
+        time_from: order.unloading_time_from,
+        time_to: order.unloading_time_to,
+      })
+    ),
     record_number: order.internal_order_number ?? '-',
     client_order_number: order.client_order_number ?? null,
     kind: params.kind || 'Order',
@@ -608,6 +742,7 @@ function buildOrderRow(params: {
     trip_editable_by_current_user:
       !!linkedTrip?.id && linkedTrip?.created_by === currentUserId,
     route_plan: params.routePlan ?? null,
+    route_steps: params.routeSteps ?? null,
     visibility_mode: params.visibilityMode ?? 'full',
   };
 }
@@ -657,17 +792,25 @@ function buildTripRow(params: {
     trip_id: trip.id,
     status: trip.status ?? null,
     prep_date: relatedOrder?.loading_date ?? null,
-    prep_display: formatScheduleSummary({
-      date: relatedOrder?.loading_date ?? null,
-      timeFrom: relatedOrder?.loading_time_from ?? null,
-      timeTo: relatedOrder?.loading_time_to ?? null,
-    }),
+    prep_time_from: relatedOrder?.loading_time_from ?? null,
+    prep_time_to: relatedOrder?.loading_time_to ?? null,
+    prep_display: formatWorkflowScheduleSummary(
+      buildWorkflowScheduleValue({
+        date: relatedOrder?.loading_date ?? null,
+        time_from: relatedOrder?.loading_time_from ?? null,
+        time_to: relatedOrder?.loading_time_to ?? null,
+      })
+    ),
     delivery_date: relatedOrder?.unloading_date ?? null,
-    delivery_display: formatScheduleSummary({
-      date: relatedOrder?.unloading_date ?? null,
-      timeFrom: relatedOrder?.unloading_time_from ?? null,
-      timeTo: relatedOrder?.unloading_time_to ?? null,
-    }),
+    delivery_time_from: relatedOrder?.unloading_time_from ?? null,
+    delivery_time_to: relatedOrder?.unloading_time_to ?? null,
+    delivery_display: formatWorkflowScheduleSummary(
+      buildWorkflowScheduleValue({
+        date: relatedOrder?.unloading_date ?? null,
+        time_from: relatedOrder?.unloading_time_from ?? null,
+        time_to: relatedOrder?.unloading_time_to ?? null,
+      })
+    ),
     record_number: trip.trip_number ?? '-',
     client_order_number: relatedOrder?.client_order_number ?? null,
     kind: trip.is_groupage ? 'Groupage' : 'Trip',
@@ -971,6 +1114,26 @@ export async function GET(req: NextRequest) {
         nextRow.field_states.status = statusState;
       }
 
+      const prepState = getWorkflowFieldState('order', orderRecordId, 'prep');
+      if (prepState) {
+        const prepSchedule = parseWorkflowScheduleValueText(prepState.value_text);
+        nextRow.prep_date = prepSchedule?.date ?? null;
+        nextRow.prep_time_from = prepSchedule?.time_from ?? null;
+        nextRow.prep_time_to = prepSchedule?.time_to ?? null;
+        nextRow.prep_display = formatWorkflowScheduleSummary(prepSchedule);
+        nextRow.field_states.prep = prepState;
+      }
+
+      const deliveryState = getWorkflowFieldState('order', orderRecordId, 'delivery');
+      if (deliveryState) {
+        const deliverySchedule = parseWorkflowScheduleValueText(deliveryState.value_text);
+        nextRow.delivery_date = deliverySchedule?.date ?? null;
+        nextRow.delivery_time_from = deliverySchedule?.time_from ?? null;
+        nextRow.delivery_time_to = deliverySchedule?.time_to ?? null;
+        nextRow.delivery_display = formatWorkflowScheduleSummary(deliverySchedule);
+        nextRow.field_states.delivery = deliveryState;
+      }
+
       const contactState = getWorkflowFieldState('order', orderRecordId, 'contact');
       if (contactState) {
         nextRow.contact_display = contactState.value_text || '-';
@@ -1093,6 +1256,26 @@ export async function GET(req: NextRequest) {
         nextRow.field_states.contact = contactState;
       }
 
+      const prepState = getWorkflowFieldState('trip', tripRecordId, 'prep');
+      if (prepState) {
+        const prepSchedule = parseWorkflowScheduleValueText(prepState.value_text);
+        nextRow.prep_date = prepSchedule?.date ?? null;
+        nextRow.prep_time_from = prepSchedule?.time_from ?? null;
+        nextRow.prep_time_to = prepSchedule?.time_to ?? null;
+        nextRow.prep_display = formatWorkflowScheduleSummary(prepSchedule);
+        nextRow.field_states.prep = prepState;
+      }
+
+      const deliveryState = getWorkflowFieldState('trip', tripRecordId, 'delivery');
+      if (deliveryState) {
+        const deliverySchedule = parseWorkflowScheduleValueText(deliveryState.value_text);
+        nextRow.delivery_date = deliverySchedule?.date ?? null;
+        nextRow.delivery_time_from = deliverySchedule?.time_from ?? null;
+        nextRow.delivery_time_to = deliverySchedule?.time_to ?? null;
+        nextRow.delivery_display = formatWorkflowScheduleSummary(deliverySchedule);
+        nextRow.field_states.delivery = deliveryState;
+      }
+
       const costState =
         options?.includeCost
           ? getWorkflowFieldState('trip', tripRecordId, 'cost')
@@ -1164,6 +1347,16 @@ export async function GET(req: NextRequest) {
       });
     };
 
+    const buildRouteStepsForOrder = (params: {
+      orderTripLinksForOrder: any[];
+    }) => {
+      const cargoLegs = params.orderTripLinksForOrder.flatMap((link: any) =>
+        cargoLegPlansByOrderTripLinkId.get(link.id as string) || []
+      );
+
+      return buildWorkflowRouteStepDisplayMap(cargoLegs);
+    };
+
     const groupageTrips = Array.from(tripMap.values())
       .filter((trip: any) => trip?.is_groupage && linksByTripId.has(trip.id))
       .sort((left: any, right: any) =>
@@ -1214,6 +1407,11 @@ export async function GET(req: NextRequest) {
                   (link: any) => link.trip_id === trip.id
                 ),
               }),
+              routeSteps: buildRouteStepsForOrder({
+                orderTripLinksForOrder: (linksByOrderId.get(order.id) || []).filter(
+                  (link: any) => link.trip_id === trip.id
+                ),
+              }),
             })
           ),
           {
@@ -1231,9 +1429,15 @@ export async function GET(req: NextRequest) {
       const carrier = Array.isArray(trip.carrier) ? trip.carrier[0] ?? null : trip.carrier;
       const groupContactState = getWorkflowFieldState('trip', trip.id, 'contact');
       const groupStatusState = getWorkflowFieldState('trip', trip.id, 'status');
+      const groupPrepState = getWorkflowFieldState('trip', trip.id, 'prep');
+      const groupDeliveryState = getWorkflowFieldState('trip', trip.id, 'delivery');
       const groupCostState = getWorkflowFieldState('trip', trip.id, 'cost');
       const groupTripVehicleState = getWorkflowFieldState('trip', trip.id, 'trip_vehicle');
       const groupProfitState = getWorkflowFieldState('trip', trip.id, 'profit');
+      const groupPrepSchedule = parseWorkflowScheduleValueText(groupPrepState?.value_text);
+      const groupDeliverySchedule = parseWorkflowScheduleValueText(
+        groupDeliveryState?.value_text
+      );
 
       const effectiveGroupCostDisplay = groupCostState?.value_text || formatMoney(tripCostValue, 'EUR');
       const effectiveGroupCostValue =
@@ -1270,6 +1474,14 @@ export async function GET(req: NextRequest) {
         trip_id: trip.id,
         trip_number: trip.trip_number ?? '-',
         trip_status: groupStatusState?.value_text || (trip.status ?? null),
+        prep_date: groupPrepSchedule?.date ?? null,
+        prep_time_from: groupPrepSchedule?.time_from ?? null,
+        prep_time_to: groupPrepSchedule?.time_to ?? null,
+        prep_display: formatWorkflowScheduleSummary(groupPrepSchedule),
+        delivery_date: groupDeliverySchedule?.date ?? null,
+        delivery_time_from: groupDeliverySchedule?.time_from ?? null,
+        delivery_time_to: groupDeliverySchedule?.time_to ?? null,
+        delivery_display: formatWorkflowScheduleSummary(groupDeliverySchedule),
         carrier_display: formatCompanyDisplayName(carrier),
         responsible_display: groupContactState?.value_text || formatPerson(createdByUser),
         vehicle_display: groupTripVehicleState?.value_text || buildVehicleSummary(trip),
@@ -1277,6 +1489,8 @@ export async function GET(req: NextRequest) {
         cost_display: effectiveGroupCostDisplay,
         field_states: {
           ...(groupStatusState ? { status: groupStatusState } : {}),
+          ...(groupPrepState ? { prep: groupPrepState } : {}),
+          ...(groupDeliveryState ? { delivery: groupDeliveryState } : {}),
           ...(groupContactState ? { contact: groupContactState } : {}),
           ...(groupCostState ? { cost: groupCostState } : {}),
           ...(groupTripVehicleState ? { trip_vehicle: groupTripVehicleState } : {}),
@@ -1373,6 +1587,9 @@ export async function GET(req: NextRequest) {
               routePlan: buildRoutePlanForOrder({
                 orderId: order.id as string,
                 linkedTrip,
+                orderTripLinksForOrder: linksByOrderId.get(order.id) || [],
+              }),
+              routeSteps: buildRouteStepsForOrder({
                 orderTripLinksForOrder: linksByOrderId.get(order.id) || [],
               }),
             })

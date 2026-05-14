@@ -10,6 +10,10 @@ import {
   isWorkflowRecordType,
 } from '@/lib/constants/workflow-fields';
 import {
+  parseWorkflowScheduleValueText,
+  serializeWorkflowScheduleValue,
+} from '@/lib/utils/workflow-schedule';
+import {
   canAccessLinkedRecord,
   loadCurrentLinkingProfile,
   loadOrderLinkContext,
@@ -71,12 +75,36 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Invalid field key' }, { status: 400 });
   }
 
-  const nextValue =
+  let nextValue =
     typeof body.value_text === 'string' ? body.value_text.trim() : body.value_text;
 
   if (fieldKey === 'status') {
     if (!isWorkflowExecutionStatus(nextValue)) {
       return NextResponse.json({ error: 'Invalid workflow status' }, { status: 400 });
+    }
+  }
+
+  if (fieldKey === 'prep' || fieldKey === 'delivery') {
+    if (typeof nextValue !== 'string' || nextValue === '') {
+      nextValue = null;
+    } else {
+      const parsedSchedule = parseWorkflowScheduleValueText(nextValue);
+
+      if (!parsedSchedule) {
+        return NextResponse.json(
+          { error: `Invalid ${fieldKey} schedule` },
+          { status: 400 }
+        );
+      }
+
+      if (!parsedSchedule.date && (parsedSchedule.time_from || parsedSchedule.time_to)) {
+        return NextResponse.json(
+          { error: `${fieldKey === 'prep' ? 'Prep' : 'Delivery'} date is required when time is set` },
+          { status: 400 }
+        );
+      }
+
+      nextValue = serializeWorkflowScheduleValue(parsedSchedule);
     }
   }
 
