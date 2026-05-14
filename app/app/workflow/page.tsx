@@ -1909,26 +1909,69 @@ function WorkflowDisplayCell({
   selectOptions?: Array<{ value: string; label: string }>;
   scheduleEditor?: boolean;
 }) {
+  const parsedSchedule =
+    scheduleEditor && isEditing
+      ? parseWorkflowScheduleValueText(editingValue) || {
+          date: null,
+          time_from: null,
+          time_to: null,
+        }
+      : null;
+  const [scheduleDraft, setScheduleDraft] = useState<{
+    date: string;
+    time_from: string;
+    time_to: string;
+  }>({
+    date: '',
+    time_from: '',
+    time_to: '',
+  });
+
+  useEffect(() => {
+    if (!scheduleEditor || !isEditing) {
+      return;
+    }
+
+    setScheduleDraft({
+      date: parsedSchedule?.date || '',
+      time_from: parsedSchedule?.time_from || '',
+      time_to: parsedSchedule?.time_to || '',
+    });
+  }, [
+    editingValue,
+    isEditing,
+    parsedSchedule?.date,
+    parsedSchedule?.time_from,
+    parsedSchedule?.time_to,
+    scheduleEditor,
+  ]);
+
   if (isEditing) {
     if (scheduleEditor) {
-      const schedule = parseWorkflowScheduleValueText(editingValue) || {
-        date: null,
-        time_from: null,
-        time_to: null,
+      const syncScheduleDraft = (nextDraft: {
+        date: string;
+        time_from: string;
+        time_to: string;
+      }) => {
+        const normalizedSchedule = buildWorkflowScheduleValue({
+          date: nextDraft.date || null,
+          time_from: nextDraft.time_from || null,
+          time_to: nextDraft.time_to || null,
+        });
+
+        onChangeEditingValue?.(serializeWorkflowScheduleValue(normalizedSchedule) || '');
       };
 
-      const updateScheduleValue = (next: {
-        date?: string | null;
-        time_from?: string | null;
-        time_to?: string | null;
-      }) => {
-        onChangeEditingValue?.(
-          serializeWorkflowScheduleValue({
-            date: next.date ?? schedule.date ?? null,
-            time_from: next.time_from ?? schedule.time_from ?? null,
-            time_to: next.time_to ?? schedule.time_to ?? null,
-          }) || ''
-        );
+      const updateScheduleDraft = (next: Partial<typeof scheduleDraft>) => {
+        setScheduleDraft((prev) => {
+          const nextDraft = {
+            date: next.date ?? prev.date,
+            time_from: next.time_from ?? prev.time_from,
+            time_to: next.time_to ?? prev.time_to,
+          };
+          syncScheduleDraft(nextDraft);
+          return nextDraft;
+        });
       };
 
       const handleWrapperBlur = (event: ReactFocusEvent<HTMLDivElement>) => {
@@ -1952,36 +1995,53 @@ function WorkflowDisplayCell({
       };
 
       return (
-        <div
-          className="grid min-w-[240px] grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1fr)] gap-1"
-          onBlur={handleWrapperBlur}
-        >
-          <input
-            autoFocus
-            type="date"
-            value={schedule.date || ''}
-            onChange={(event) => updateScheduleValue({ date: event.target.value || null })}
-            onKeyDown={handleInputKeyDown}
-            className="workflow-edit-input min-w-0 rounded-md border border-sky-400 bg-white px-1 leading-none outline-none ring-1 ring-sky-200"
-          />
-          <input
-            type="time"
-            value={schedule.time_from || ''}
-            onChange={(event) =>
-              updateScheduleValue({ time_from: event.target.value || null })
-            }
-            onKeyDown={handleInputKeyDown}
-            className="workflow-edit-input min-w-0 rounded-md border border-sky-400 bg-white px-1 leading-none outline-none ring-1 ring-sky-200"
-          />
-          <input
-            type="time"
-            value={schedule.time_to || ''}
-            onChange={(event) =>
-              updateScheduleValue({ time_to: event.target.value || null })
-            }
-            onKeyDown={handleInputKeyDown}
-            className="workflow-edit-input min-w-0 rounded-md border border-sky-400 bg-white px-1 leading-none outline-none ring-1 ring-sky-200"
-          />
+        <div className="relative z-50">
+          <div className="workflow-compact-cell rounded-md border border-sky-400 bg-white px-2 py-1 text-slate-900 shadow-sm ring-1 ring-sky-200">
+            {formatWorkflowScheduleSummary(
+              buildWorkflowScheduleValue({
+                date: scheduleDraft.date || null,
+                time_from: scheduleDraft.time_from || null,
+                time_to: scheduleDraft.time_to || null,
+              })
+            ) || value || '-'}
+          </div>
+          <div
+            className="absolute left-0 top-full mt-1 grid min-w-[280px] grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1fr)] gap-1 rounded-lg border border-sky-200 bg-white p-2 shadow-xl"
+            onBlur={handleWrapperBlur}
+          >
+            <input
+              autoFocus
+              type="date"
+              value={scheduleDraft.date}
+              onChange={(event) => updateScheduleDraft({ date: event.target.value || '' })}
+              onKeyDown={handleInputKeyDown}
+              className="workflow-edit-input min-w-0 rounded-md border border-sky-400 bg-white px-1 leading-none outline-none ring-1 ring-sky-200"
+            />
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={5}
+              placeholder="08:30"
+              value={scheduleDraft.time_from}
+              onChange={(event) =>
+                updateScheduleDraft({ time_from: event.target.value || '' })
+              }
+              onKeyDown={handleInputKeyDown}
+              className="workflow-edit-input min-w-0 rounded-md border border-sky-400 bg-white px-1 leading-none outline-none ring-1 ring-sky-200"
+            />
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={5}
+              placeholder="16:30"
+              value={scheduleDraft.time_to}
+              onChange={(event) =>
+                updateScheduleDraft({ time_to: event.target.value || '' })
+              }
+              onKeyDown={handleInputKeyDown}
+              className="workflow-edit-input min-w-0 rounded-md border border-sky-400 bg-white px-1 leading-none outline-none ring-1 ring-sky-200"
+            />
+          </div>
         </div>
       );
     }
