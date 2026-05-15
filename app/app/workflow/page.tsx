@@ -198,6 +198,29 @@ type WorkflowRouteTripOption = {
   } | null;
 };
 
+type WorkflowCargoLegExecutionDetail = {
+  id: string;
+  cargo_leg_id: string;
+  planned_date: string | null;
+  planned_time_from: string | null;
+  planned_time_to: string | null;
+  actual_date: string | null;
+  actual_time_from: string | null;
+  actual_time_to: string | null;
+  transport_price: number | null;
+  truck_plate: string | null;
+  trailer_plate: string | null;
+  driver_name: string | null;
+  driver_phone: string | null;
+  manager_notes: string | null;
+  arrival_confirmed: boolean;
+  dimensions_checked: boolean;
+  cargo_matches: boolean;
+  damaged_reported: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
 type WorkflowCargoLegRow = {
   id: string;
   organization_id: string | null;
@@ -235,6 +258,7 @@ type WorkflowCargoLegRow = {
     last_name: string | null;
   }>;
   linked_trip: WorkflowRouteTripOption | null;
+  execution_detail: WorkflowCargoLegExecutionDetail | null;
 };
 
 type WorkflowLinkedTripRow = {
@@ -335,6 +359,19 @@ type WorkflowCollectionEditorState = {
   manager_user_ids: string[];
   show_to_all_managers: boolean;
   linked_trip_number: string;
+  execution_date: string;
+  execution_time_from: string;
+  execution_time_to: string;
+  transport_price: string;
+  truck_plate: string;
+  trailer_plate: string;
+  driver_name: string;
+  driver_phone: string;
+  manager_notes: string;
+  arrival_confirmed: boolean;
+  dimensions_checked: boolean;
+  cargo_matches: boolean;
+  damaged_reported: boolean;
 };
 
 type WorkflowRouteEditorStepKey = WorkflowCollectionEditorState['step_key'];
@@ -947,6 +984,38 @@ function getWorkflowRouteStepDisplay(
     default:
       return null;
   }
+}
+
+function buildWorkflowExecutionEditorState(
+  cargoLeg: WorkflowCargoLegRow | null,
+  matchedTrip: WorkflowRouteTripOption | null
+) {
+  const execution = cargoLeg?.execution_detail;
+
+  return {
+    execution_date: execution?.planned_date || '',
+    execution_time_from: execution?.planned_time_from || '',
+    execution_time_to: execution?.planned_time_to || '',
+    transport_price:
+      execution?.transport_price !== null && execution?.transport_price !== undefined
+        ? String(execution.transport_price)
+        : '',
+    truck_plate:
+      execution?.truck_plate || cargoLeg?.linked_trip?.truck_plate || matchedTrip?.truck_plate || '',
+    trailer_plate:
+      execution?.trailer_plate ||
+      cargoLeg?.linked_trip?.trailer_plate ||
+      matchedTrip?.trailer_plate ||
+      '',
+    driver_name:
+      execution?.driver_name || cargoLeg?.linked_trip?.driver_name || matchedTrip?.driver_name || '',
+    driver_phone: execution?.driver_phone || '',
+    manager_notes: execution?.manager_notes || '',
+    arrival_confirmed: execution?.arrival_confirmed || false,
+    dimensions_checked: execution?.dimensions_checked || false,
+    cargo_matches: execution?.cargo_matches || false,
+    damaged_reported: execution?.damaged_reported || false,
+  };
 }
 
 function removeCompanyCode(value: string | null | undefined) {
@@ -2179,6 +2248,15 @@ function WorkflowCollectionRouteEditorOverlay({
   const routeMode = getWorkflowRouteEditorRouteMode(editor.step_key);
   const modeRequiresRoute = editor.mode === routeMode;
   const tripHint = WORKFLOW_ROUTE_EDITOR_CONFIG[editor.step_key].emptyTripHint;
+  const isReloadingStep =
+    editor.step_key === 'reloading_before' || editor.step_key === 'reloading_after';
+  const isTransportStep = !isReloadingStep;
+  const executionLabel = `${stepLabel} time`;
+  const priceLabel = `${stepLabel} price`;
+  const notesLabel = 'Notes';
+  const notesPlaceholder = isReloadingStep
+    ? 'Arrival confirmed, dimensions checked, damaged, mismatch, or other reloading notes.'
+    : 'Extra information for the manager responsible for this route step.';
 
   return (
     <div
@@ -2372,6 +2450,175 @@ function WorkflowCollectionRouteEditorOverlay({
                 {tripHint}
               </span>
             )}
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+            <div className="mb-2 text-[11px] font-semibold text-slate-900">
+              Route execution details
+            </div>
+            <div className="grid gap-3 lg:grid-cols-2">
+              <div className="space-y-2 lg:col-span-2">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                  {executionLabel}
+                </div>
+                <div className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)] gap-2">
+                  <input
+                    type="date"
+                    value={editor.execution_date}
+                    onChange={(event) => onChange({ execution_date: event.target.value })}
+                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                  />
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={5}
+                    placeholder="08:30"
+                    value={editor.execution_time_from}
+                    onChange={(event) =>
+                      onChange({ execution_time_from: event.target.value })
+                    }
+                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                  />
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={5}
+                    placeholder="16:30"
+                    value={editor.execution_time_to}
+                    onChange={(event) =>
+                      onChange({ execution_time_to: event.target.value })
+                    }
+                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                  {priceLabel}
+                </label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={editor.transport_price}
+                  onChange={(event) => onChange({ transport_price: event.target.value })}
+                  className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                />
+              </div>
+
+              {isTransportStep ? (
+                <>
+                  <div>
+                    <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                      Truck plate
+                    </label>
+                    <input
+                      type="text"
+                      value={editor.truck_plate}
+                      onChange={(event) =>
+                        onChange({ truck_plate: event.target.value.toUpperCase() })
+                      }
+                      className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                      Trailer plate
+                    </label>
+                    <input
+                      type="text"
+                      value={editor.trailer_plate}
+                      onChange={(event) =>
+                        onChange({ trailer_plate: event.target.value.toUpperCase() })
+                      }
+                      className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                      Driver
+                    </label>
+                    <input
+                      type="text"
+                      value={editor.driver_name}
+                      onChange={(event) => onChange({ driver_name: event.target.value })}
+                      className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                      Driver phone
+                    </label>
+                    <input
+                      type="text"
+                      value={editor.driver_phone}
+                      onChange={(event) => onChange({ driver_phone: event.target.value })}
+                      className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                    />
+                  </div>
+                </>
+              ) : (
+                <div className="lg:col-span-2 grid gap-2 md:grid-cols-2">
+                  <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={editor.arrival_confirmed}
+                      onChange={(event) =>
+                        onChange({ arrival_confirmed: event.target.checked })
+                      }
+                    />
+                    <span>Arrival confirmed</span>
+                  </label>
+                  <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={editor.dimensions_checked}
+                      onChange={(event) =>
+                        onChange({ dimensions_checked: event.target.checked })
+                      }
+                    />
+                    <span>Dimensions checked</span>
+                  </label>
+                  <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={editor.cargo_matches}
+                      onChange={(event) =>
+                        onChange({ cargo_matches: event.target.checked })
+                      }
+                    />
+                    <span>Everything matches</span>
+                  </label>
+                  <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={editor.damaged_reported}
+                      onChange={(event) =>
+                        onChange({ damaged_reported: event.target.checked })
+                      }
+                    />
+                    <span>Damaged</span>
+                  </label>
+                </div>
+              )}
+
+              <div className="lg:col-span-2">
+                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                  {notesLabel}
+                </label>
+                <textarea
+                  rows={3}
+                  value={editor.manager_notes}
+                  onChange={(event) => onChange({ manager_notes: event.target.value })}
+                  placeholder={notesPlaceholder}
+                  className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                />
+              </div>
+            </div>
           </div>
         </>
       ) : (
@@ -4501,10 +4748,12 @@ export default function WorkflowPage() {
         );
         const stepDisplay = getWorkflowRouteStepDisplay(row, stepKey);
         const storedMode = getWorkflowRouteEditorModeValue(row.route_plan, stepKey);
+        const matchedTrip = stepCargoLeg?.linked_trip || null;
         const initialMode =
           stepCargoLeg || storedMode === getWorkflowRouteEditorRouteMode(stepKey)
             ? getWorkflowRouteEditorRouteMode(stepKey)
             : storedMode;
+        const executionState = buildWorkflowExecutionEditorState(stepCargoLeg, matchedTrip);
 
       setCollectionRouteEditor({
           row_id: row.id,
@@ -4527,8 +4776,9 @@ export default function WorkflowPage() {
         linked_trip_number:
           stepCargoLeg?.linked_trip?.trip_number ||
           (initialMode === getWorkflowRouteEditorRouteMode(stepKey) ? '' : ''),
+        ...executionState,
       });
-      setCollectionRouteEditorMatchedTrip(stepCargoLeg?.linked_trip || null);
+      setCollectionRouteEditorMatchedTrip(matchedTrip);
       setCollectionRouteEditorErrors({});
     } catch (error) {
       toast.error('Failed to load route setup');
@@ -4609,6 +4859,45 @@ export default function WorkflowPage() {
           : row
       )
     );
+  };
+
+  const saveCollectionRouteExecutionDetails = async (
+    cargoLegId: string,
+    editor: WorkflowCollectionEditorState
+  ) => {
+    const executionRes = await fetch('/api/cargo-legs/execution/upsert', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        cargo_leg_id: cargoLegId,
+        planned_date: editor.execution_date || null,
+        planned_time_from: editor.execution_time_from || null,
+        planned_time_to: editor.execution_time_to || null,
+        actual_date: null,
+        actual_time_from: null,
+        actual_time_to: null,
+        transport_price: editor.transport_price || null,
+        truck_plate: editor.truck_plate || null,
+        trailer_plate: editor.trailer_plate || null,
+        driver_name: editor.driver_name || null,
+        driver_phone: editor.driver_phone || null,
+        manager_notes: editor.manager_notes || null,
+        arrival_confirmed: editor.arrival_confirmed,
+        dimensions_checked: editor.dimensions_checked,
+        cargo_matches: editor.cargo_matches,
+        damaged_reported: editor.damaged_reported,
+      }),
+    });
+
+    const executionData = await executionRes.json();
+
+    if (!executionRes.ok) {
+      throw new Error(
+        executionData.error || 'Failed to save route execution details'
+      );
+    }
   };
 
   const saveCollectionRouteEditor = async () => {
@@ -4853,6 +5142,22 @@ export default function WorkflowPage() {
         return;
       }
 
+      const savedCargoLegId =
+        (routeStepData?.cargo_leg?.id as string | undefined) || resolvedCargoLegId || null;
+
+      if (savedCargoLegId) {
+        try {
+          await saveCollectionRouteExecutionDetails(savedCargoLegId, editor);
+        } catch (error) {
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : 'Failed to save route execution details'
+          );
+          return;
+        }
+      }
+
       if (routePlanUpdate) {
         applyRoutePlanUpdateLocally(editor.order_id, routePlanUpdate);
       }
@@ -5021,6 +5326,19 @@ export default function WorkflowPage() {
 
       const createdTrip = data.created_trip as { trip_number?: string } | undefined;
       const createdCargoLeg = data.cargo_leg as WorkflowCargoLegRow | undefined;
+
+      if (createdCargoLeg?.id) {
+        try {
+          await saveCollectionRouteExecutionDetails(createdCargoLeg.id, editor);
+        } catch (error) {
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : 'Failed to save route execution details'
+          );
+          return;
+        }
+      }
 
       setCollectionRouteEditor((prev) =>
         prev

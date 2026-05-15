@@ -45,6 +45,7 @@ export const cargoLegSelect = `
   ),
   linked_trip:linked_trip_id (
     id,
+    organization_id,
     trip_number,
     status,
     driver_name,
@@ -63,6 +64,28 @@ export const cargoLegSelect = `
       first_name,
       last_name
     )
+  ),
+  execution_detail:cargo_leg_execution_details (
+    id,
+    cargo_leg_id,
+    planned_date,
+    planned_time_from,
+    planned_time_to,
+    actual_date,
+    actual_time_from,
+    actual_time_to,
+    transport_price,
+    truck_plate,
+    trailer_plate,
+    driver_name,
+    driver_phone,
+    manager_notes,
+    arrival_confirmed,
+    dimensions_checked,
+    cargo_matches,
+    damaged_reported,
+    created_at,
+    updated_at
   )
 `;
 
@@ -183,6 +206,9 @@ export function mapCargoLeg(cargoLeg: any) {
     : cargoLeg.manager_shares
       ? [cargoLeg.manager_shares]
       : [];
+  const executionDetail = Array.isArray(cargoLeg.execution_detail)
+    ? (cargoLeg.execution_detail[0] ?? null)
+    : cargoLeg.execution_detail;
 
   return {
     id: cargoLeg.id,
@@ -251,6 +277,30 @@ export function mapCargoLeg(cargoLeg: any) {
         };
       })
       .filter((manager: any) => !!manager.id),
+    execution_detail: executionDetail
+      ? {
+          id: executionDetail.id,
+          cargo_leg_id: executionDetail.cargo_leg_id ?? cargoLeg.id,
+          planned_date: executionDetail.planned_date ?? null,
+          planned_time_from: executionDetail.planned_time_from ?? null,
+          planned_time_to: executionDetail.planned_time_to ?? null,
+          actual_date: executionDetail.actual_date ?? null,
+          actual_time_from: executionDetail.actual_time_from ?? null,
+          actual_time_to: executionDetail.actual_time_to ?? null,
+          transport_price: executionDetail.transport_price ?? null,
+          truck_plate: executionDetail.truck_plate ?? null,
+          trailer_plate: executionDetail.trailer_plate ?? null,
+          driver_name: executionDetail.driver_name ?? null,
+          driver_phone: executionDetail.driver_phone ?? null,
+          manager_notes: executionDetail.manager_notes ?? null,
+          arrival_confirmed: !!executionDetail.arrival_confirmed,
+          dimensions_checked: !!executionDetail.dimensions_checked,
+          cargo_matches: !!executionDetail.cargo_matches,
+          damaged_reported: !!executionDetail.damaged_reported,
+          created_at: executionDetail.created_at ?? null,
+          updated_at: executionDetail.updated_at ?? null,
+        }
+      : null,
     created_by_user: createdByUser
       ? {
           first_name: createdByUser.first_name ?? null,
