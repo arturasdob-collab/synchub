@@ -212,6 +212,28 @@ type CargoLegRow = {
     last_name: string | null;
   }>;
   linked_trip: RouteTripOption | null;
+  execution_detail: {
+    id: string;
+    cargo_leg_id: string;
+    planned_date: string | null;
+    planned_time_from: string | null;
+    planned_time_to: string | null;
+    actual_date: string | null;
+    actual_time_from: string | null;
+    actual_time_to: string | null;
+    transport_price: number | null;
+    truck_plate: string | null;
+    trailer_plate: string | null;
+    driver_name: string | null;
+    driver_phone: string | null;
+    manager_notes: string | null;
+    arrival_confirmed: boolean;
+    dimensions_checked: boolean;
+    cargo_matches: boolean;
+    damaged_reported: boolean;
+    created_at: string | null;
+    updated_at: string | null;
+  } | null;
 };
 
 type LinkedTripRow = {
@@ -593,6 +615,93 @@ function formatRouteTripMeta(trip: RouteTripOption | null | undefined) {
   ].filter(Boolean);
 
   return primary.length > 0 ? primary.join(' / ') : '-';
+}
+
+function formatExecutionTimeValue(
+  date?: string | null,
+  timeFrom?: string | null,
+  timeTo?: string | null
+) {
+  const datePart = typeof date === 'string' && date.trim() !== '' ? date.trim() : null;
+  const fromPart =
+    typeof timeFrom === 'string' && timeFrom.trim() !== '' ? timeFrom.trim() : null;
+  const toPart =
+    typeof timeTo === 'string' && timeTo.trim() !== '' ? timeTo.trim() : null;
+
+  if (!datePart && !fromPart && !toPart) {
+    return null;
+  }
+
+  if (datePart && fromPart && toPart) {
+    return `${datePart} / ${fromPart}-${toPart}`;
+  }
+
+  if (datePart && fromPart) {
+    return `${datePart} / ${fromPart}`;
+  }
+
+  if (datePart && toPart) {
+    return `${datePart} / ${toPart}`;
+  }
+
+  if (datePart) {
+    return datePart;
+  }
+
+  return [fromPart, toPart].filter(Boolean).join('-') || null;
+}
+
+function getCargoLegExecutionTimeLabel(legType: CargoLegType) {
+  switch (legType) {
+    case 'collection':
+      return 'Collection time';
+    case 'reloading':
+      return 'Reloading time';
+    case 'international_trip':
+      return 'International time';
+    case 'delivery':
+      return 'Distribution time';
+    default:
+      return 'Time';
+  }
+}
+
+function getCargoLegExecutionPriceLabel(legType: CargoLegType) {
+  switch (legType) {
+    case 'collection':
+      return 'Collection price';
+    case 'reloading':
+      return 'Reloading price';
+    case 'international_trip':
+      return 'International price';
+    case 'delivery':
+      return 'Distribution price';
+    default:
+      return 'Price';
+  }
+}
+
+function formatExecutionPrice(value: number | null | undefined) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+
+  return `${value} EUR`;
+}
+
+function getReloadingExecutionChecks(cargoLeg: CargoLegRow) {
+  const detail = cargoLeg.execution_detail;
+
+  if (!detail || cargoLeg.leg_type !== 'reloading') {
+    return [];
+  }
+
+  return [
+    detail.arrival_confirmed ? 'Arrival confirmed' : null,
+    detail.dimensions_checked ? 'Dimensions checked' : null,
+    detail.cargo_matches ? 'Everything matches' : null,
+    detail.damaged_reported ? 'Damaged' : null,
+  ].filter(Boolean) as string[];
 }
 
 function getNextCargoLegOrder(cargoLegs: CargoLegRow[]) {
@@ -4215,6 +4324,102 @@ export default function OrderPage() {
                                     : formatOrganizationLocation(
                                         cargoLeg.responsible_organization
                                       )}
+                                </div>
+                              ) : null}
+                              {cargoLeg.execution_detail ? (
+                                <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] text-slate-600">
+                                  <div className="flex flex-wrap gap-x-3 gap-y-1">
+                                    {formatExecutionTimeValue(
+                                      cargoLeg.execution_detail.planned_date,
+                                      cargoLeg.execution_detail.planned_time_from,
+                                      cargoLeg.execution_detail.planned_time_to
+                                    ) ? (
+                                      <span>
+                                        <span className="font-medium text-slate-700">
+                                          {getCargoLegExecutionTimeLabel(cargoLeg.leg_type)}:
+                                        </span>{' '}
+                                        {formatExecutionTimeValue(
+                                          cargoLeg.execution_detail.planned_date,
+                                          cargoLeg.execution_detail.planned_time_from,
+                                          cargoLeg.execution_detail.planned_time_to
+                                        )}
+                                      </span>
+                                    ) : null}
+
+                                    {formatExecutionPrice(
+                                      cargoLeg.execution_detail.transport_price
+                                    ) ? (
+                                      <span>
+                                        <span className="font-medium text-slate-700">
+                                          {getCargoLegExecutionPriceLabel(cargoLeg.leg_type)}:
+                                        </span>{' '}
+                                        {formatExecutionPrice(
+                                          cargoLeg.execution_detail.transport_price
+                                        )}
+                                      </span>
+                                    ) : null}
+                                  </div>
+
+                                  {cargoLeg.leg_type !== 'reloading' &&
+                                  (cargoLeg.execution_detail.truck_plate ||
+                                    cargoLeg.execution_detail.trailer_plate ||
+                                    cargoLeg.execution_detail.driver_name ||
+                                    cargoLeg.execution_detail.driver_phone) ? (
+                                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                                      {(cargoLeg.execution_detail.truck_plate ||
+                                        cargoLeg.execution_detail.trailer_plate) ? (
+                                        <span>
+                                          <span className="font-medium text-slate-700">
+                                            Plates:
+                                          </span>{' '}
+                                          {[
+                                            cargoLeg.execution_detail.truck_plate,
+                                            cargoLeg.execution_detail.trailer_plate,
+                                          ]
+                                            .filter(Boolean)
+                                            .join(' / ')}
+                                        </span>
+                                      ) : null}
+
+                                      {cargoLeg.execution_detail.driver_name ? (
+                                        <span>
+                                          <span className="font-medium text-slate-700">
+                                            Driver:
+                                          </span>{' '}
+                                          {cargoLeg.execution_detail.driver_name}
+                                        </span>
+                                      ) : null}
+
+                                      {cargoLeg.execution_detail.driver_phone ? (
+                                        <span>
+                                          <span className="font-medium text-slate-700">
+                                            Phone:
+                                          </span>{' '}
+                                          {cargoLeg.execution_detail.driver_phone}
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                  ) : null}
+
+                                  {getReloadingExecutionChecks(cargoLeg).length > 0 ? (
+                                    <div className="mt-1 flex flex-wrap gap-1">
+                                      {getReloadingExecutionChecks(cargoLeg).map((item) => (
+                                        <span
+                                          key={item}
+                                          className="rounded-full border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] text-slate-700"
+                                        >
+                                          {item}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : null}
+
+                                  {cargoLeg.execution_detail.manager_notes ? (
+                                    <div className="mt-1 whitespace-pre-wrap text-[11px] text-slate-600">
+                                      <span className="font-medium text-slate-700">Notes:</span>{' '}
+                                      {cargoLeg.execution_detail.manager_notes}
+                                    </div>
+                                  ) : null}
                                 </div>
                               ) : null}
                             </div>
