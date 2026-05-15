@@ -2461,7 +2461,7 @@ function WorkflowCollectionRouteEditorOverlay({
                 <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">
                   {executionLabel}
                 </div>
-                <div className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)] gap-2">
+                <div className="grid gap-2 md:grid-cols-[148px_84px_84px_120px]">
                   <input
                     type="date"
                     value={editor.execution_date}
@@ -2490,80 +2490,76 @@ function WorkflowCollectionRouteEditorOverlay({
                     }
                     className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
                   />
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    placeholder={priceLabel}
+                    value={editor.transport_price}
+                    onChange={(event) => onChange({ transport_price: event.target.value })}
+                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                  />
                 </div>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                  {priceLabel}
-                </label>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  placeholder="0.00"
-                  value={editor.transport_price}
-                  onChange={(event) => onChange({ transport_price: event.target.value })}
-                  className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-                />
               </div>
 
               {isTransportStep ? (
                 <>
-                  <div>
-                    <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                      Truck plate
-                    </label>
-                    <input
-                      type="text"
-                      value={editor.truck_plate}
-                      onChange={(event) =>
-                        onChange({ truck_plate: event.target.value.toUpperCase() })
-                      }
-                      className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-                    />
-                  </div>
+                  <div className="lg:col-span-2 grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.1fr)_124px]">
+                    <div>
+                      <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                        Truck plate
+                      </label>
+                      <input
+                        type="text"
+                        value={editor.truck_plate}
+                        onChange={(event) =>
+                          onChange({ truck_plate: event.target.value.toUpperCase() })
+                        }
+                        className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                      />
+                    </div>
 
-                  <div>
-                    <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                      Trailer plate
-                    </label>
-                    <input
-                      type="text"
-                      value={editor.trailer_plate}
-                      onChange={(event) =>
-                        onChange({ trailer_plate: event.target.value.toUpperCase() })
-                      }
-                      className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-                    />
-                  </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                        Trailer plate
+                      </label>
+                      <input
+                        type="text"
+                        value={editor.trailer_plate}
+                        onChange={(event) =>
+                          onChange({ trailer_plate: event.target.value.toUpperCase() })
+                        }
+                        className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                      />
+                    </div>
 
-                  <div>
-                    <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                      Driver
-                    </label>
-                    <input
-                      type="text"
-                      value={editor.driver_name}
-                      onChange={(event) => onChange({ driver_name: event.target.value })}
-                      className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-                    />
-                  </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                        Driver
+                      </label>
+                      <input
+                        type="text"
+                        value={editor.driver_name}
+                        onChange={(event) => onChange({ driver_name: event.target.value })}
+                        className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                      />
+                    </div>
 
-                  <div>
-                    <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                      Driver phone
-                    </label>
-                    <input
-                      type="text"
-                      value={editor.driver_phone}
-                      onChange={(event) => onChange({ driver_phone: event.target.value })}
-                      className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-                    />
+                    <div>
+                      <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                        Phone
+                      </label>
+                      <input
+                        type="text"
+                        value={editor.driver_phone}
+                        onChange={(event) => onChange({ driver_phone: event.target.value })}
+                        className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                      />
+                    </div>
                   </div>
                 </>
               ) : (
                 <div className="lg:col-span-2 grid gap-2 md:grid-cols-2">
-                  <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+                  <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700">
                     <input
                       type="checkbox"
                       checked={editor.arrival_confirmed}
@@ -2573,7 +2569,7 @@ function WorkflowCollectionRouteEditorOverlay({
                     />
                     <span>Arrival confirmed</span>
                   </label>
-                  <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+                  <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700">
                     <input
                       type="checkbox"
                       checked={editor.dimensions_checked}
@@ -2583,7 +2579,7 @@ function WorkflowCollectionRouteEditorOverlay({
                     />
                     <span>Dimensions checked</span>
                   </label>
-                  <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+                  <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700">
                     <input
                       type="checkbox"
                       checked={editor.cargo_matches}
@@ -2593,7 +2589,7 @@ function WorkflowCollectionRouteEditorOverlay({
                     />
                     <span>Everything matches</span>
                   </label>
-                  <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+                  <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700">
                     <input
                       type="checkbox"
                       checked={editor.damaged_reported}
@@ -2611,7 +2607,7 @@ function WorkflowCollectionRouteEditorOverlay({
                   {notesLabel}
                 </label>
                 <textarea
-                  rows={3}
+                  rows={2}
                   value={editor.manager_notes}
                   onChange={(event) => onChange({ manager_notes: event.target.value })}
                   placeholder={notesPlaceholder}
