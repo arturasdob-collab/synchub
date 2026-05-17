@@ -14,6 +14,14 @@ import { useRouter } from 'next/navigation';
 import { Check, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
+  CARGO_LEG_DOCUMENT_ACCEPT_ATTRIBUTE,
+  CARGO_LEG_DOCUMENT_ZONE_DESCRIPTIONS,
+  CARGO_LEG_DOCUMENT_ZONE_LABELS,
+  CARGO_LEG_DOCUMENT_ZONES,
+  type CargoLegDocumentZone,
+} from '@/lib/constants/cargo-leg-documents';
+import { formatOrderDocumentFileSize } from '@/lib/constants/order-documents';
+import {
   WORKFLOW_EXECUTION_STATUSES,
   WORKFLOW_EXECUTION_STATUS_LABELS,
   type WorkflowEditableFieldKey,
@@ -220,6 +228,26 @@ type WorkflowCargoLegExecutionDetail = {
   damaged_reported: boolean;
   created_at: string | null;
   updated_at: string | null;
+};
+
+type WorkflowCargoLegDocumentRow = {
+  id: string;
+  cargo_leg_id: string;
+  original_file_name: string;
+  mime_type: string;
+  file_size: number;
+  document_zone: CargoLegDocumentZone;
+  uploaded_by_organization_id: string | null;
+  uploaded_by_organization_name: string;
+  created_at: string | null;
+  signed_url: string | null;
+  can_manage: boolean;
+  created_by_user:
+    | {
+        first_name: string | null;
+        last_name: string | null;
+      }
+    | null;
 };
 
 type WorkflowCargoLegRow = {
@@ -2256,6 +2284,11 @@ function WorkflowCollectionRouteEditorOverlay({
   managers,
   warehouses,
   matchedTrip,
+  documents,
+  visibleDocumentZones,
+  documentsLoading,
+  documentsUploading,
+  documentDeletingId,
   loading,
   saving,
   lookupLoading,
@@ -2263,6 +2296,8 @@ function WorkflowCollectionRouteEditorOverlay({
   onChange,
   onSave,
   onCreateTrip,
+  onUploadDocument,
+  onDeleteDocument,
   onCancel,
 }: {
   editor: WorkflowCollectionEditorState;
@@ -2270,6 +2305,11 @@ function WorkflowCollectionRouteEditorOverlay({
   managers: ManagerOption[];
   warehouses: OrganizationWarehouseOption[];
   matchedTrip: WorkflowRouteTripOption | null;
+  documents: WorkflowCargoLegDocumentRow[];
+  visibleDocumentZones: CargoLegDocumentZone[];
+  documentsLoading: boolean;
+  documentsUploading: boolean;
+  documentDeletingId: string;
   loading: boolean;
   saving: boolean;
   lookupLoading: boolean;
@@ -2284,6 +2324,11 @@ function WorkflowCollectionRouteEditorOverlay({
   ) => void;
   onSave: () => void;
   onCreateTrip: () => void;
+  onUploadDocument: (
+    documentZone: CargoLegDocumentZone,
+    files: FileList | null
+  ) => void;
+  onDeleteDocument: (documentId: string) => void;
   onCancel: () => void;
 }) {
   const organizationValue = editor.responsible_organization_id;
@@ -2304,6 +2349,13 @@ function WorkflowCollectionRouteEditorOverlay({
   const notesPlaceholder = isReloadingStep
     ? 'Arrival confirmed, dimensions checked, damaged, mismatch, or other reloading notes.'
     : 'Extra information for the manager responsible for this route step.';
+  const documentsByZone = visibleDocumentZones.reduce(
+    (acc, zone) => {
+      acc[zone] = documents.filter((document) => document.document_zone === zone);
+      return acc;
+    },
+    {} as Record<CargoLegDocumentZone, WorkflowCargoLegDocumentRow[]>
+  );
 
   return (
     <div
@@ -2690,6 +2742,125 @@ function WorkflowCollectionRouteEditorOverlay({
             : 'This will save only the workflow plan. No cargo route step will be created yet.'}
         </div>
       )}
+
+      <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div>
+            <div className="text-[11px] font-semibold text-slate-900">Route documents</div>
+            <div className="text-[10px] text-slate-500">
+              Files for this specific {stepLabel.toLowerCase()} step.
+            </div>
+          </div>
+          {documentsLoading ? (
+            <div className="inline-flex items-center gap-1 text-[10px] text-slate-500">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Loading
+            </div>
+          ) : null}
+        </div>
+
+        {!modeRequiresRoute ? (
+          <div className="rounded-md border border-dashed border-slate-200 bg-white px-2 py-2 text-[11px] text-slate-500">
+            Documents will appear here after this step is saved as a real route step.
+          </div>
+        ) : !editor.cargo_leg_id ? (
+          <div className="rounded-md border border-dashed border-slate-200 bg-white px-2 py-2 text-[11px] text-slate-500">
+            Save this route step first, then we can add documents here.
+          </div>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2">
+            {visibleDocumentZones.map((zone) => {
+              const zoneDocuments = documentsByZone[zone] || [];
+
+              return (
+                <div
+                  key={zone}
+                  className="rounded-lg border border-slate-200 bg-white p-2.5"
+                >
+                  <div className="mb-2 flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-semibold text-slate-900">
+                        {CARGO_LEG_DOCUMENT_ZONE_LABELS[zone]}
+                      </div>
+                      <div className="text-[10px] leading-4 text-slate-500">
+                        {CARGO_LEG_DOCUMENT_ZONE_DESCRIPTIONS[zone]}
+                      </div>
+                    </div>
+                    <label className="shrink-0 cursor-pointer rounded-md border border-slate-300 bg-white px-2 py-1 text-[10px] font-medium text-slate-700 hover:bg-slate-50">
+                      Add file
+                      <input
+                        type="file"
+                        multiple
+                        accept={CARGO_LEG_DOCUMENT_ACCEPT_ATTRIBUTE}
+                        className="hidden"
+                        onChange={(event) => {
+                          onUploadDocument(zone, event.currentTarget.files);
+                          event.currentTarget.value = '';
+                        }}
+                        disabled={documentsUploading || saving || loading}
+                      />
+                    </label>
+                  </div>
+
+                  {zoneDocuments.length === 0 ? (
+                    <div className="rounded-md border border-dashed border-slate-200 px-2 py-3 text-center text-[10px] text-slate-400">
+                      No files yet.
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {zoneDocuments.map((document) => (
+                        <div
+                          key={document.id}
+                          className="rounded-md border border-slate-200 px-2 py-1.5"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div
+                                className="truncate text-[11px] font-medium text-slate-800"
+                                title={document.original_file_name}
+                              >
+                                {document.original_file_name}
+                              </div>
+                              <div className="text-[10px] text-slate-500">
+                                {formatOrderDocumentFileSize(document.file_size)} ·{' '}
+                                {document.uploaded_by_organization_name || '-'}
+                              </div>
+                              <div className="text-[10px] text-slate-400">
+                                {formatManagerLabel(document.created_by_user)}
+                              </div>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-1">
+                              {document.signed_url ? (
+                                <button
+                                  type="button"
+                                  onClick={() => window.open(document.signed_url!, '_blank')}
+                                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-[10px] font-medium text-slate-700 hover:bg-slate-50"
+                                >
+                                  Open
+                                </button>
+                              ) : null}
+                              {document.can_manage ? (
+                                <button
+                                  type="button"
+                                  onClick={() => onDeleteDocument(document.id)}
+                                  disabled={documentDeletingId === document.id}
+                                  className="rounded-md border border-red-200 bg-white px-2 py-1 text-[10px] font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {documentDeletingId === document.id ? '...' : 'Delete'}
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       <div className="flex items-center justify-end gap-2 pt-1">
         <button
@@ -4023,6 +4194,17 @@ export default function WorkflowPage() {
     manager_user_ids?: string;
     linked_trip_number?: string;
   }>({});
+  const [collectionRouteDocuments, setCollectionRouteDocuments] = useState<
+    WorkflowCargoLegDocumentRow[]
+  >([]);
+  const [collectionRouteVisibleDocumentZones, setCollectionRouteVisibleDocumentZones] =
+    useState<CargoLegDocumentZone[]>([...CARGO_LEG_DOCUMENT_ZONES]);
+  const [collectionRouteDocumentsLoading, setCollectionRouteDocumentsLoading] =
+    useState(false);
+  const [collectionRouteDocumentsUploading, setCollectionRouteDocumentsUploading] =
+    useState(false);
+  const [collectionRouteDocumentDeletingId, setCollectionRouteDocumentDeletingId] =
+    useState('');
 
   useEffect(() => {
     void fetchWorkflow();
@@ -4373,6 +4555,19 @@ export default function WorkflowPage() {
     void fetchCollectionRouteManagers(collectionRouteEditor.responsible_organization_id);
     void fetchCollectionRouteWarehouses(collectionRouteEditor.responsible_organization_id);
   }, [collectionRouteEditor?.responsible_organization_id]);
+
+  useEffect(() => {
+    const cargoLegId = collectionRouteEditor?.cargo_leg_id;
+
+    if (!cargoLegId) {
+      setCollectionRouteDocuments([]);
+      setCollectionRouteVisibleDocumentZones([...CARGO_LEG_DOCUMENT_ZONES]);
+      setCollectionRouteDocumentsLoading(false);
+      return;
+    }
+
+    void loadCollectionRouteDocuments(cargoLegId);
+  }, [collectionRouteEditor?.cargo_leg_id]);
 
   useEffect(() => {
     if (!collectionRouteEditor) {
@@ -4735,6 +4930,11 @@ export default function WorkflowPage() {
     setCollectionRouteEditorWarehouses([]);
     setCollectionRouteEditorLookupLoading(false);
     setCollectionRouteEditorErrors({});
+    setCollectionRouteDocuments([]);
+    setCollectionRouteVisibleDocumentZones([...CARGO_LEG_DOCUMENT_ZONES]);
+    setCollectionRouteDocumentsLoading(false);
+    setCollectionRouteDocumentsUploading(false);
+    setCollectionRouteDocumentDeletingId('');
   };
 
   const closeCollectionRouteEditor = () => {
@@ -4757,6 +4957,121 @@ export default function WorkflowPage() {
 
       return typeof patch === 'function' ? patch(prev) : { ...prev, ...patch };
     });
+  };
+
+  const loadCollectionRouteDocuments = async (cargoLegId: string) => {
+    try {
+      setCollectionRouteDocumentsLoading(true);
+      const searchParams = new URLSearchParams();
+      searchParams.set('cargoLegId', cargoLegId);
+
+      const res = await fetch(
+        `/api/cargo-legs/documents/list?${searchParams.toString()}`,
+        {
+          method: 'GET',
+        }
+      );
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to load route documents');
+        setCollectionRouteDocuments([]);
+        setCollectionRouteVisibleDocumentZones([...CARGO_LEG_DOCUMENT_ZONES]);
+        return;
+      }
+
+      setCollectionRouteDocuments(data.documents || []);
+      setCollectionRouteVisibleDocumentZones(
+        Array.isArray(data.permissions?.visible_zones) &&
+          data.permissions.visible_zones.length > 0
+          ? data.permissions.visible_zones
+          : [...CARGO_LEG_DOCUMENT_ZONES]
+      );
+    } catch (error) {
+      toast.error('Failed to load route documents');
+      setCollectionRouteDocuments([]);
+      setCollectionRouteVisibleDocumentZones([...CARGO_LEG_DOCUMENT_ZONES]);
+    } finally {
+      setCollectionRouteDocumentsLoading(false);
+    }
+  };
+
+  const uploadCollectionRouteDocuments = async (
+    documentZone: CargoLegDocumentZone,
+    files: FileList | null
+  ) => {
+    if (!collectionRouteEditor?.cargo_leg_id || !files || files.length === 0) {
+      return;
+    }
+
+    try {
+      setCollectionRouteDocumentsUploading(true);
+      let uploadedCount = 0;
+
+      for (const file of Array.from(files)) {
+        const formData = new FormData();
+        formData.set('cargo_leg_id', collectionRouteEditor.cargo_leg_id);
+        formData.set('document_zone', documentZone);
+        formData.set('file', file);
+
+        const res = await fetch('/api/cargo-legs/documents/upload', {
+          method: 'POST',
+          body: formData,
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          toast.error(data.error || 'Failed to upload route document');
+          continue;
+        }
+
+        uploadedCount += 1;
+      }
+
+      if (uploadedCount > 0) {
+        toast.success(
+          `${CARGO_LEG_DOCUMENT_ZONE_LABELS[documentZone]} saved: ${uploadedCount}`
+        );
+        await loadCollectionRouteDocuments(collectionRouteEditor.cargo_leg_id);
+      }
+    } catch (error) {
+      toast.error('Failed to upload route documents');
+    } finally {
+      setCollectionRouteDocumentsUploading(false);
+    }
+  };
+
+  const deleteCollectionRouteDocument = async (documentId: string) => {
+    try {
+      setCollectionRouteDocumentDeletingId(documentId);
+
+      const res = await fetch('/api/cargo-legs/documents/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ id: documentId }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to delete route document');
+        return;
+      }
+
+      toast.success('Route document deleted');
+
+      if (collectionRouteEditor?.cargo_leg_id) {
+        await loadCollectionRouteDocuments(collectionRouteEditor.cargo_leg_id);
+      }
+    } catch (error) {
+      toast.error('Failed to delete route document');
+    } finally {
+      setCollectionRouteDocumentDeletingId('');
+    }
   };
 
   const openCollectionRouteEditor = async (
@@ -6335,6 +6650,11 @@ export default function WorkflowPage() {
           managers={collectionRouteEditorManagers}
           warehouses={collectionRouteEditorWarehouses}
           matchedTrip={collectionRouteEditorMatchedTrip}
+          documents={collectionRouteDocuments}
+          visibleDocumentZones={collectionRouteVisibleDocumentZones}
+          documentsLoading={collectionRouteDocumentsLoading}
+          documentsUploading={collectionRouteDocumentsUploading}
+          documentDeletingId={collectionRouteDocumentDeletingId}
           loading={collectionRouteEditorLoading}
           saving={collectionRouteEditorSaving}
           lookupLoading={collectionRouteEditorLookupLoading}
@@ -6342,6 +6662,8 @@ export default function WorkflowPage() {
           onChange={updateCollectionRouteEditor}
           onSave={saveCollectionRouteEditor}
           onCreateTrip={createCollectionRouteTrip}
+          onUploadDocument={uploadCollectionRouteDocuments}
+          onDeleteDocument={deleteCollectionRouteDocument}
           onCancel={closeCollectionRouteEditor}
         />
       ) : null}

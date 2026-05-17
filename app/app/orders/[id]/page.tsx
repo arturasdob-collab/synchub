@@ -343,6 +343,8 @@ type OrderDocumentRow = {
   mime_type: string;
   file_size: number;
   document_zone: OrderDocumentZone;
+  source_type?: 'order' | 'cargo_leg';
+  cargo_leg_id?: string | null;
   uploaded_by_organization_id: string | null;
   uploaded_by_organization_name: string;
   created_at: string | null;
@@ -1597,36 +1599,69 @@ export default function OrderPage() {
       setDocumentsLoading(true);
 
       const searchParams = new URLSearchParams({ orderId });
-      const res = await fetch(
-        `/api/orders/documents/list?${searchParams.toString()}`,
-        {
+      const [orderDocumentsRes, routeDocumentsRes] = await Promise.all([
+        fetch(`/api/orders/documents/list?${searchParams.toString()}`, {
           method: 'GET',
-        }
-      );
+        }),
+        fetch(`/api/orders/cargo-leg-documents/list?${searchParams.toString()}`, {
+          method: 'GET',
+        }),
+      ]);
 
-      const data = await res.json();
+      const [orderDocumentsData, routeDocumentsData] = await Promise.all([
+        orderDocumentsRes.json(),
+        routeDocumentsRes.json(),
+      ]);
 
-      if (!res.ok) {
-        toast.error(data.error || 'Failed to load documents');
-        setOrderDocuments([]);
+      let nextOrderDocuments: OrderDocumentRow[] = [];
+
+      if (!orderDocumentsRes.ok) {
+        toast.error(orderDocumentsData.error || 'Failed to load documents');
         setOrderDocumentPermissions({
           is_same_organization: true,
           can_manage_all: false,
           can_upload_order_zone: true,
           visible_zones: [...ORDER_DOCUMENT_ZONES],
         });
-        return;
+      } else {
+        nextOrderDocuments = (orderDocumentsData.documents || []).map((document: any) => ({
+          ...document,
+          source_type: 'order' as const,
+          cargo_leg_id: null,
+        }));
+        setOrderDocumentPermissions({
+          is_same_organization: Boolean(orderDocumentsData.permissions?.is_same_organization),
+          can_manage_all: Boolean(orderDocumentsData.permissions?.can_manage_all),
+          can_upload_order_zone: Boolean(orderDocumentsData.permissions?.can_upload_order_zone),
+          visible_zones: Array.isArray(orderDocumentsData.permissions?.visible_zones)
+            ? orderDocumentsData.permissions.visible_zones
+            : [...ORDER_DOCUMENT_ZONES],
+        });
       }
 
-      setOrderDocuments(data.documents || []);
-      setOrderDocumentPermissions({
-        is_same_organization: Boolean(data.permissions?.is_same_organization),
-        can_manage_all: Boolean(data.permissions?.can_manage_all),
-        can_upload_order_zone: Boolean(data.permissions?.can_upload_order_zone),
-        visible_zones: Array.isArray(data.permissions?.visible_zones)
-          ? data.permissions.visible_zones
-          : [...ORDER_DOCUMENT_ZONES],
+      if (!routeDocumentsRes.ok) {
+        toast.error(routeDocumentsData.error || 'Failed to load route step documents');
+      } else {
+        const nextRouteDocuments: OrderDocumentRow[] = (routeDocumentsData.documents || []).map(
+          (document: any) => ({
+            ...document,
+            order_id: orderId,
+            document_zone: document.document_zone as OrderDocumentZone,
+            source_type: 'cargo_leg' as const,
+            cargo_leg_id: document.cargo_leg_id ?? null,
+          })
+        );
+
+        nextOrderDocuments = [...nextOrderDocuments, ...nextRouteDocuments];
+      }
+
+      nextOrderDocuments.sort((left, right) => {
+        const leftTime = left.created_at ? new Date(left.created_at).getTime() : 0;
+        const rightTime = right.created_at ? new Date(right.created_at).getTime() : 0;
+        return rightTime - leftTime;
       });
+
+      setOrderDocuments(nextOrderDocuments);
     } catch (error) {
       toast.error('Failed to load documents');
       setOrderDocuments([]);
@@ -1964,30 +1999,48 @@ export default function OrderPage() {
     }
   };
 
-  const deleteDocument = async (documentId: string) => {
-    const confirmed = window.confirm('Delete this document?');
+  const deleteDocument = async (document: OrderDocumentRow) => {
+    const confirmed = window.confirm(
+      document.source_type === 'cargo_leg'
+        ? 'Delete this route document?'
+        : 'Delete this document?'
+    );
 
     if (!confirmed) {
       return;
     }
 
     try {
-      setDeletingDocumentId(documentId);
+      setDeletingDocumentId(document.id);
 
-      const res = await fetch('/api/orders/documents/delete', {
+      const endpoint =
+        document.source_type === 'cargo_leg'
+          ? '/api/cargo-legs/documents/delete'
+          : '/api/orders/documents/delete';
+
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: documentId }),
+        body: JSON.stringify({ id: document.id }),
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        toast.error(data.error || 'Failed to delete document');
+        toast.error(
+          data.error ||
+            (document.source_type === 'cargo_leg'
+              ? 'Failed to delete route document'
+              : 'Failed to delete document')
+        );
         return;
       }
 
-      toast.success('Document deleted');
+      toast.success(
+        document.source_type === 'cargo_leg'
+          ? 'Route document deleted'
+          : 'Document deleted'
+      );
       await fetchDocuments();
     } catch (error) {
       toast.error('Unexpected error');
@@ -2762,6 +2815,23 @@ export default function OrderPage() {
       {} as Record<OrderDocumentZone, OrderDocumentRow[]>
     );
   }, [orderDocuments]);
+
+  const cargoLegDocumentContextById = useMemo(() => {
+    const map = new Map<string, string>();
+
+    for (const trip of linkedTrips) {
+      for (const cargoLeg of trip.cargo_legs) {
+        map.set(
+          cargoLeg.id,
+          `${trip.trip_number} / ${cargoLeg.leg_order} ${formatCargoLegTypeLabel(
+            cargoLeg.leg_type
+          )}`
+        );
+      }
+    }
+
+    return map;
+  }, [linkedTrips]);
   const visibleDocumentZones = ORDER_DOCUMENT_ZONES;
 
   const renderCargoLegEditor = () => (
@@ -4203,6 +4273,13 @@ export default function OrderPage() {
                                 <div className="text-xs text-slate-500">
                                   Organization: {document.uploaded_by_organization_name || '-'}
                                 </div>
+                                {document.source_type === 'cargo_leg' &&
+                                document.cargo_leg_id ? (
+                                  <div className="text-xs text-slate-500">
+                                    Route step:{' '}
+                                    {cargoLegDocumentContextById.get(document.cargo_leg_id) || '-'}
+                                  </div>
+                                ) : null}
                               </div>
 
                               <div className="flex shrink-0 items-center gap-2">
@@ -4225,7 +4302,7 @@ export default function OrderPage() {
                                 {document.can_manage ? (
                                   <button
                                     type="button"
-                                    onClick={() => deleteDocument(document.id)}
+                                    onClick={() => deleteDocument(document)}
                                     disabled={deletingDocumentId === document.id}
                                     className="rounded-md border px-2.5 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
                                   >
