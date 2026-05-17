@@ -201,6 +201,7 @@ type WorkflowRouteTripOption = {
 type WorkflowCargoLegExecutionDetail = {
   id: string;
   cargo_leg_id: string;
+  step_status: string | null;
   planned_date: string | null;
   planned_time_from: string | null;
   planned_time_to: string | null;
@@ -359,6 +360,7 @@ type WorkflowCollectionEditorState = {
   manager_user_ids: string[];
   show_to_all_managers: boolean;
   linked_trip_number: string;
+  step_status: string;
   execution_date: string;
   execution_time_from: string;
   execution_time_to: string;
@@ -375,6 +377,50 @@ type WorkflowCollectionEditorState = {
 };
 
 type WorkflowRouteEditorStepKey = WorkflowCollectionEditorState['step_key'];
+
+const WORKFLOW_ROUTE_STEP_STATUS_OPTIONS = [
+  { value: '', label: 'Not set' },
+  { value: 'active', label: 'Active' },
+  { value: 'at_loading_place', label: 'At loading place' },
+  { value: 'at_customs', label: 'At customs' },
+  { value: 'loaded', label: 'Loaded' },
+  { value: 'in_transit', label: 'In transit' },
+  { value: 'loaded_to_warehouse', label: 'Loaded to warehouse' },
+  { value: 'at_warehouse', label: 'At warehouse' },
+  { value: 'loaded_to_international_truck', label: 'Loaded to international truck' },
+  { value: 'unloaded_in_warehouse', label: 'Unloaded in warehouse' },
+  { value: 'delivered', label: 'Delivered' },
+  { value: 'finished', label: 'Finished' },
+] as const;
+
+function formatWorkflowRouteStepStatusLabel(value: string | null | undefined) {
+  switch (value) {
+    case 'active':
+      return 'Active';
+    case 'at_loading_place':
+      return 'At loading place';
+    case 'at_customs':
+      return 'At customs';
+    case 'loaded':
+      return 'Loaded';
+    case 'in_transit':
+      return 'In transit';
+    case 'loaded_to_warehouse':
+      return 'Loaded to warehouse';
+    case 'at_warehouse':
+      return 'At warehouse';
+    case 'loaded_to_international_truck':
+      return 'Loaded to international truck';
+    case 'unloaded_in_warehouse':
+      return 'Unloaded in warehouse';
+    case 'delivered':
+      return 'Delivered';
+    case 'finished':
+      return 'Finished';
+    default:
+      return 'Not set';
+  }
+}
 
 type WorkflowFilters = {
   search: string;
@@ -993,6 +1039,7 @@ function buildWorkflowExecutionEditorState(
   const execution = cargoLeg?.execution_detail;
 
   return {
+    step_status: execution?.step_status || '',
     execution_date: execution?.planned_date || '',
     execution_time_from: execution?.planned_time_from || '',
     execution_time_to: execution?.planned_time_to || '',
@@ -2458,6 +2505,25 @@ function WorkflowCollectionRouteEditorOverlay({
             </div>
             <div className="grid gap-3 lg:grid-cols-2">
               <div className="space-y-2 lg:col-span-2">
+                <div className="grid gap-2 md:grid-cols-[140px_minmax(0,1fr)]">
+                  <div>
+                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                      Step status
+                    </div>
+                    <select
+                      value={editor.step_status}
+                      onChange={(event) => onChange({ step_status: event.target.value })}
+                      className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                    >
+                      {WORKFLOW_ROUTE_STEP_STATUS_OPTIONS.map((option) => (
+                        <option key={option.value || 'empty'} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
                 <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">
                   {executionLabel}
                 </div>
@@ -4868,6 +4934,7 @@ export default function WorkflowPage() {
       },
       body: JSON.stringify({
         cargo_leg_id: cargoLegId,
+        step_status: editor.step_status || null,
         planned_date: editor.execution_date || null,
         planned_time_from: editor.execution_time_from || null,
         planned_time_to: editor.execution_time_to || null,

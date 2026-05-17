@@ -68,6 +68,7 @@ export const cargoLegSelect = `
   execution_detail:cargo_leg_execution_details (
     id,
     cargo_leg_id,
+    step_status,
     planned_date,
     planned_time_from,
     planned_time_to,
@@ -278,9 +279,10 @@ export function mapCargoLeg(cargoLeg: any) {
       })
       .filter((manager: any) => !!manager.id),
     execution_detail: executionDetail
-      ? {
+        ? {
           id: executionDetail.id,
           cargo_leg_id: executionDetail.cargo_leg_id ?? cargoLeg.id,
+          step_status: executionDetail.step_status ?? null,
           planned_date: executionDetail.planned_date ?? null,
           planned_time_from: executionDetail.planned_time_from ?? null,
           planned_time_to: executionDetail.planned_time_to ?? null,

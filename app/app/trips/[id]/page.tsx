@@ -23,7 +23,21 @@ import {
 type TripDetails = {
   id: string;
   trip_number: string;
-  status: 'unconfirmed' | 'confirmed' | 'active' | 'completed';
+  status:
+    | 'unconfirmed'
+    | 'confirmed'
+    | 'active'
+    | 'at_loading_place'
+    | 'at_customs'
+    | 'loaded'
+    | 'in_transit'
+    | 'loaded_to_warehouse'
+    | 'at_warehouse'
+    | 'loaded_to_international_truck'
+    | 'unloaded_in_warehouse'
+    | 'delivered'
+    | 'finished'
+    | 'completed';
   can_view_financials: boolean;
   carrier_company_id: string | null;
   groupage_responsible_manager_id: string | null;
@@ -366,7 +380,22 @@ export default function TripPage() {
 
   const [form, setForm] = useState({
     id: '',
-    status: 'unconfirmed' as 'unconfirmed' | 'confirmed' | 'active' | 'completed',
+    status:
+      'unconfirmed' as
+        | 'unconfirmed'
+        | 'confirmed'
+        | 'active'
+        | 'at_loading_place'
+        | 'at_customs'
+        | 'loaded'
+        | 'in_transit'
+        | 'loaded_to_warehouse'
+        | 'at_warehouse'
+        | 'loaded_to_international_truck'
+        | 'unloaded_in_warehouse'
+        | 'delivered'
+        | 'finished'
+        | 'completed',
     shared_manager_user_id: '',
     shared_organization_id: '',
     groupage_responsible_manager_id: '',
@@ -1284,6 +1313,16 @@ export default function TripPage() {
     if (status === 'unconfirmed') return 'Unconfirmed';
     if (status === 'confirmed') return 'Confirmed';
     if (status === 'active') return 'Active';
+    if (status === 'at_loading_place') return 'At loading place';
+    if (status === 'at_customs') return 'At customs';
+    if (status === 'loaded') return 'Loaded';
+    if (status === 'in_transit') return 'In transit';
+    if (status === 'loaded_to_warehouse') return 'Loaded to warehouse';
+    if (status === 'at_warehouse') return 'At warehouse';
+    if (status === 'loaded_to_international_truck') return 'Loaded to international truck';
+    if (status === 'unloaded_in_warehouse') return 'Unloaded in warehouse';
+    if (status === 'delivered') return 'Delivered';
+    if (status === 'finished') return 'Finished';
     if (status === 'completed') return 'Completed';
     return status;
   };
@@ -1297,6 +1336,21 @@ export default function TripPage() {
     }
     if (status === 'active') {
       return 'bg-indigo-100 text-indigo-800';
+    }
+    if (
+      status === 'at_loading_place' ||
+      status === 'at_customs' ||
+      status === 'loaded' ||
+      status === 'in_transit' ||
+      status === 'loaded_to_warehouse' ||
+      status === 'at_warehouse' ||
+      status === 'loaded_to_international_truck' ||
+      status === 'unloaded_in_warehouse'
+    ) {
+      return 'bg-orange-100 text-orange-800';
+    }
+    if (status === 'delivered' || status === 'finished') {
+      return 'bg-green-100 text-green-800';
     }
     return 'bg-green-100 text-green-800';
   };

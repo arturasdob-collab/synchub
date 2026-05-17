@@ -8,7 +8,21 @@ import { toast } from 'sonner';
 type TripRow = {
   id: string;
   trip_number: string;
-  status: 'unconfirmed' | 'confirmed' | 'active' | 'completed';
+  status:
+    | 'unconfirmed'
+    | 'confirmed'
+    | 'active'
+    | 'at_loading_place'
+    | 'at_customs'
+    | 'loaded'
+    | 'in_transit'
+    | 'loaded_to_warehouse'
+    | 'at_warehouse'
+    | 'loaded_to_international_truck'
+    | 'unloaded_in_warehouse'
+    | 'delivered'
+    | 'finished'
+    | 'completed';
   truck_plate: string | null;
   trailer_plate: string | null;
   driver_name: string | null;
@@ -100,6 +114,16 @@ function formatStatusLabel(status: TripRow['status']) {
   if (status === 'unconfirmed') return 'Unconfirmed';
   if (status === 'confirmed') return 'Confirmed';
   if (status === 'active') return 'Active';
+  if (status === 'at_loading_place') return 'At loading place';
+  if (status === 'at_customs') return 'At customs';
+  if (status === 'loaded') return 'Loaded';
+  if (status === 'in_transit') return 'In transit';
+  if (status === 'loaded_to_warehouse') return 'Loaded to warehouse';
+  if (status === 'at_warehouse') return 'At warehouse';
+  if (status === 'loaded_to_international_truck') return 'Loaded to international truck';
+  if (status === 'unloaded_in_warehouse') return 'Unloaded in warehouse';
+  if (status === 'delivered') return 'Delivered';
+  if (status === 'finished') return 'Finished';
   if (status === 'completed') return 'Completed';
   return status;
 }
@@ -113,6 +137,21 @@ function getStatusBadgeClass(status: TripRow['status']) {
   }
   if (status === 'active') {
     return 'bg-indigo-100 text-indigo-800';
+  }
+  if (
+    status === 'at_loading_place' ||
+    status === 'at_customs' ||
+    status === 'loaded' ||
+    status === 'in_transit' ||
+    status === 'loaded_to_warehouse' ||
+    status === 'at_warehouse' ||
+    status === 'loaded_to_international_truck' ||
+    status === 'unloaded_in_warehouse'
+  ) {
+    return 'bg-orange-100 text-orange-800';
+  }
+  if (status === 'delivered' || status === 'finished') {
+    return 'bg-green-100 text-green-800';
   }
   return 'bg-green-100 text-green-800';
 }

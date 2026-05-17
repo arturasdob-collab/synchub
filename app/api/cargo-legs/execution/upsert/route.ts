@@ -66,6 +66,30 @@ function normalizeBoolean(value: unknown) {
   return value === true || value === 'true' || value === 1 || value === '1';
 }
 
+function normalizeStepStatus(value: unknown) {
+  const normalized = normalizeText(value);
+
+  if (!normalized) {
+    return null;
+  }
+
+  return [
+    'active',
+    'at_loading_place',
+    'at_customs',
+    'loaded',
+    'in_transit',
+    'loaded_to_warehouse',
+    'at_warehouse',
+    'loaded_to_international_truck',
+    'unloaded_in_warehouse',
+    'delivered',
+    'finished',
+  ].includes(normalized)
+    ? normalized
+    : null;
+}
+
 export async function POST(req: Request) {
   const cookieStore = cookies();
 
@@ -118,6 +142,7 @@ export async function POST(req: Request) {
     const payload = {
       organization_id: effectiveOrganizationId,
       cargo_leg_id: cargoLeg.id,
+      step_status: normalizeStepStatus(body.step_status ?? body.stepStatus),
       planned_date: normalizeDate(body.planned_date ?? body.plannedDate),
       planned_time_from: normalizeTime(body.planned_time_from ?? body.plannedTimeFrom),
       planned_time_to: normalizeTime(body.planned_time_to ?? body.plannedTimeTo),
@@ -159,6 +184,7 @@ export async function POST(req: Request) {
         `
           id,
           cargo_leg_id,
+          step_status,
           planned_date,
           planned_time_from,
           planned_time_to,

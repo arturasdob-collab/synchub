@@ -63,6 +63,10 @@ export const WORKFLOW_NUMERIC_FIELDS = new Set<WorkflowEditableFieldKey>([
 
 export const WORKFLOW_EXECUTION_STATUSES = [
   'active',
+  'at_loading_place',
+  'at_customs',
+  'loaded',
+  'in_transit',
   'loaded_to_warehouse',
   'at_warehouse',
   'loaded_to_international_truck',
@@ -79,6 +83,10 @@ export const WORKFLOW_EXECUTION_STATUS_LABELS: Record<
   string
 > = {
   active: 'Active',
+  at_loading_place: 'At loading place',
+  at_customs: 'At customs',
+  loaded: 'Loaded',
+  in_transit: 'In transit',
   loaded_to_warehouse: 'Loaded to warehouse',
   at_warehouse: 'At warehouse',
   loaded_to_international_truck: 'Loaded to international truck',

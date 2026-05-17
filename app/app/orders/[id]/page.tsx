@@ -34,6 +34,16 @@ const orderStatusOptions = [
   'unconfirmed',
   'confirmed',
   'active',
+  'at_loading_place',
+  'at_customs',
+  'loaded',
+  'in_transit',
+  'loaded_to_warehouse',
+  'at_warehouse',
+  'loaded_to_international_truck',
+  'unloaded_in_warehouse',
+  'delivered',
+  'finished',
   'completed',
 ] as const;
 
@@ -215,6 +225,7 @@ type CargoLegRow = {
   execution_detail: {
     id: string;
     cargo_leg_id: string;
+    step_status: string | null;
     planned_date: string | null;
     planned_time_from: string | null;
     planned_time_to: string | null;
@@ -480,6 +491,17 @@ function normalizeOrderTimeInputValue(value?: string | null) {
 function formatOrderStatusLabel(status: OrderDetails['status']) {
   if (!status) return '-';
 
+  if (status === 'at_loading_place') return 'At loading place';
+  if (status === 'at_customs') return 'At customs';
+  if (status === 'loaded') return 'Loaded';
+  if (status === 'in_transit') return 'In transit';
+  if (status === 'loaded_to_warehouse') return 'Loaded to warehouse';
+  if (status === 'at_warehouse') return 'At warehouse';
+  if (status === 'loaded_to_international_truck') return 'Loaded to international truck';
+  if (status === 'unloaded_in_warehouse') return 'Unloaded in warehouse';
+  if (status === 'delivered') return 'Delivered';
+  if (status === 'finished') return 'Finished';
+
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
@@ -494,6 +516,23 @@ function getOrderStatusBadgeClass(status: OrderDetails['status']) {
 
   if (status === 'active') {
     return 'bg-indigo-100 text-indigo-800';
+  }
+
+  if (
+    status === 'at_loading_place' ||
+    status === 'at_customs' ||
+    status === 'loaded' ||
+    status === 'in_transit' ||
+    status === 'loaded_to_warehouse' ||
+    status === 'at_warehouse' ||
+    status === 'loaded_to_international_truck' ||
+    status === 'unloaded_in_warehouse'
+  ) {
+    return 'bg-orange-100 text-orange-800';
+  }
+
+  if (status === 'delivered' || status === 'finished') {
+    return 'bg-green-100 text-green-800';
   }
 
   if (status === 'completed') {
@@ -687,6 +726,35 @@ function formatExecutionPrice(value: number | null | undefined) {
   }
 
   return `${value} EUR`;
+}
+
+function formatCargoLegExecutionStatusLabel(value: string | null | undefined) {
+  switch (value) {
+    case 'active':
+      return 'Active';
+    case 'at_loading_place':
+      return 'At loading place';
+    case 'at_customs':
+      return 'At customs';
+    case 'loaded':
+      return 'Loaded';
+    case 'in_transit':
+      return 'In transit';
+    case 'loaded_to_warehouse':
+      return 'Loaded to warehouse';
+    case 'at_warehouse':
+      return 'At warehouse';
+    case 'loaded_to_international_truck':
+      return 'Loaded to international truck';
+    case 'unloaded_in_warehouse':
+      return 'Unloaded in warehouse';
+    case 'delivered':
+      return 'Delivered';
+    case 'finished':
+      return 'Finished';
+    default:
+      return null;
+  }
 }
 
 function getReloadingExecutionChecks(cargoLeg: CargoLegRow) {
@@ -4329,6 +4397,19 @@ export default function OrderPage() {
                               {cargoLeg.execution_detail ? (
                                 <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] text-slate-600">
                                   <div className="flex flex-wrap gap-x-3 gap-y-1">
+                                    {formatCargoLegExecutionStatusLabel(
+                                      cargoLeg.execution_detail.step_status
+                                    ) ? (
+                                      <span>
+                                        <span className="font-medium text-slate-700">
+                                          Status:
+                                        </span>{' '}
+                                        {formatCargoLegExecutionStatusLabel(
+                                          cargoLeg.execution_detail.step_status
+                                        )}
+                                      </span>
+                                    ) : null}
+
                                     {formatExecutionTimeValue(
                                       cargoLeg.execution_detail.planned_date,
                                       cargoLeg.execution_detail.planned_time_from,
