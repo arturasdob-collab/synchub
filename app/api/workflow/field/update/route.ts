@@ -23,7 +23,11 @@ import {
   canAccessOrderViaCargoRoute,
   canAccessTripViaCargoRoute,
 } from '@/lib/server/cargo-legs';
-import { upsertWorkflowFieldUpdate } from '@/lib/server/workflow-field-updates';
+import {
+  buildWorkflowFieldCompositeKey,
+  loadWorkflowFieldUpdates,
+  upsertWorkflowFieldUpdate,
+} from '@/lib/server/workflow-field-updates';
 
 export async function POST(req: Request) {
   const cookieStore = cookies();
@@ -110,6 +114,10 @@ export async function POST(req: Request) {
 
   const profile = await loadCurrentLinkingProfile(serviceSupabase, user.id);
   let organizationId = profile.organization_id as string;
+  const isElevatedUser =
+    profile.is_super_admin === true ||
+    profile.is_creator === true ||
+    ['OWNER', 'ADMIN'].includes(profile.role ?? '');
 
   if (recordType === 'order') {
     const { order, sharedManagerUserId } = await loadOrderLinkContext(
@@ -135,17 +143,43 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
+    const statusUpdates = await loadWorkflowFieldUpdates(serviceSupabase, {
+      recordType: 'order',
+      recordIds: [recordId],
+    });
+    const currentStatusOverride = statusUpdates.get(
+      buildWorkflowFieldCompositeKey({
+        recordType: 'order',
+        recordId,
+        fieldKey: 'status',
+      })
+    )?.value_text;
+    const currentEffectiveStatus = currentStatusOverride ?? order.status ?? null;
+
     if (
       fieldKey === 'status' &&
       nextValue === 'finished' &&
       order.created_by !== user.id &&
-      profile.is_super_admin !== true &&
-      profile.is_creator !== true &&
-      !['OWNER', 'ADMIN'].includes(profile.role ?? '')
+      !isElevatedUser
     ) {
       return NextResponse.json(
         {
           error: `Only order creator can set status to ${WORKFLOW_EXECUTION_STATUS_LABELS.finished.toLowerCase()}`,
+        },
+        { status: 403 }
+      );
+    }
+
+    if (
+      fieldKey === 'status' &&
+      currentEffectiveStatus === 'finished' &&
+      nextValue !== 'finished' &&
+      order.created_by !== user.id &&
+      !isElevatedUser
+    ) {
+      return NextResponse.json(
+        {
+          error: 'Only order creator can return finished order to workflow',
         },
         { status: 403 }
       );
@@ -176,17 +210,43 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
+    const statusUpdates = await loadWorkflowFieldUpdates(serviceSupabase, {
+      recordType: 'trip',
+      recordIds: [recordId],
+    });
+    const currentStatusOverride = statusUpdates.get(
+      buildWorkflowFieldCompositeKey({
+        recordType: 'trip',
+        recordId,
+        fieldKey: 'status',
+      })
+    )?.value_text;
+    const currentEffectiveStatus = currentStatusOverride ?? trip.status ?? null;
+
     if (
       fieldKey === 'status' &&
       nextValue === 'finished' &&
       trip.created_by !== user.id &&
-      profile.is_super_admin !== true &&
-      profile.is_creator !== true &&
-      !['OWNER', 'ADMIN'].includes(profile.role ?? '')
+      !isElevatedUser
     ) {
       return NextResponse.json(
         {
           error: `Only trip creator can set status to ${WORKFLOW_EXECUTION_STATUS_LABELS.finished.toLowerCase()}`,
+        },
+        { status: 403 }
+      );
+    }
+
+    if (
+      fieldKey === 'status' &&
+      currentEffectiveStatus === 'finished' &&
+      nextValue !== 'finished' &&
+      trip.created_by !== user.id &&
+      !isElevatedUser
+    ) {
+      return NextResponse.json(
+        {
+          error: 'Only trip creator can return finished trip to workflow',
         },
         { status: 403 }
       );

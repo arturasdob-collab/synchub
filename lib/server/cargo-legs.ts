@@ -85,6 +85,8 @@ export const cargoLegSelect = `
     dimensions_checked,
     cargo_matches,
     damaged_reported,
+    created_by,
+    updated_by,
     created_at,
     updated_at
   )
@@ -210,6 +212,16 @@ export function mapCargoLeg(cargoLeg: any) {
   const executionDetail = Array.isArray(cargoLeg.execution_detail)
     ? (cargoLeg.execution_detail[0] ?? null)
     : cargoLeg.execution_detail;
+  const executionCreatedByUser = executionDetail
+    ? Array.isArray(executionDetail.created_by_user)
+      ? (executionDetail.created_by_user[0] ?? null)
+      : executionDetail.created_by_user
+    : null;
+  const executionUpdatedByUser = executionDetail
+    ? Array.isArray(executionDetail.updated_by_user)
+      ? (executionDetail.updated_by_user[0] ?? null)
+      : executionDetail.updated_by_user
+    : null;
 
   return {
     id: cargoLeg.id,
@@ -299,8 +311,22 @@ export function mapCargoLeg(cargoLeg: any) {
           dimensions_checked: !!executionDetail.dimensions_checked,
           cargo_matches: !!executionDetail.cargo_matches,
           damaged_reported: !!executionDetail.damaged_reported,
+          created_by: executionDetail.created_by ?? null,
+          updated_by: executionDetail.updated_by ?? null,
           created_at: executionDetail.created_at ?? null,
           updated_at: executionDetail.updated_at ?? null,
+          created_by_user: executionCreatedByUser
+            ? {
+                first_name: executionCreatedByUser.first_name ?? null,
+                last_name: executionCreatedByUser.last_name ?? null,
+              }
+            : null,
+          updated_by_user: executionUpdatedByUser
+            ? {
+                first_name: executionUpdatedByUser.first_name ?? null,
+                last_name: executionUpdatedByUser.last_name ?? null,
+              }
+            : null,
         }
       : null,
     created_by_user: createdByUser

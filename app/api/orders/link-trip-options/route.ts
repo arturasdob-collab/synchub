@@ -202,6 +202,72 @@ export async function GET(req: NextRequest) {
       cargoLegsByLinkId.set(linkId, existing);
     }
 
+    const executionUserIds = Array.from(
+      new Set(
+        Array.from(cargoLegsByLinkId.values())
+          .flat()
+          .flatMap((cargoLeg: any) => [
+            cargoLeg.execution_detail?.created_by ?? null,
+            cargoLeg.execution_detail?.updated_by ?? null,
+          ])
+          .filter(
+            (value: unknown): value is string =>
+              typeof value === 'string' && value.trim() !== ''
+          )
+      )
+    );
+
+    const executionUsersById = new Map<
+      string,
+      { first_name: string | null; last_name: string | null }
+    >();
+
+    if (executionUserIds.length > 0) {
+      const { data: executionUsers, error: executionUsersError } = await serviceSupabase
+        .from('user_profiles')
+        .select('id, first_name, last_name')
+        .in('id', executionUserIds);
+
+      if (executionUsersError) {
+        return NextResponse.json({ error: executionUsersError.message }, { status: 500 });
+      }
+
+      for (const row of executionUsers || []) {
+        if (!row?.id) {
+          continue;
+        }
+
+        executionUsersById.set(row.id, {
+          first_name: row.first_name ?? null,
+          last_name: row.last_name ?? null,
+        });
+      }
+
+      for (const [linkId, cargoLegs] of Array.from(cargoLegsByLinkId.entries())) {
+        cargoLegsByLinkId.set(
+          linkId,
+          cargoLegs.map((cargoLeg: any) => ({
+            ...cargoLeg,
+            execution_detail: cargoLeg.execution_detail
+              ? {
+                  ...cargoLeg.execution_detail,
+                  created_by_user:
+                    cargoLeg.execution_detail.created_by &&
+                    executionUsersById.has(cargoLeg.execution_detail.created_by)
+                      ? executionUsersById.get(cargoLeg.execution_detail.created_by) ?? null
+                      : null,
+                  updated_by_user:
+                    cargoLeg.execution_detail.updated_by &&
+                    executionUsersById.has(cargoLeg.execution_detail.updated_by)
+                      ? executionUsersById.get(cargoLeg.execution_detail.updated_by) ?? null
+                      : null,
+                }
+              : null,
+          }))
+        );
+      }
+    }
+
     const linkedTrips = linkedRows
       .map((row: any) => {
         const trip = Array.isArray(row.trip) ? row.trip[0] ?? null : row.trip;

@@ -206,6 +206,10 @@ function parseNumericText(value: string | null | undefined) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function isFinishedWorkflowStatus(value: string | null | undefined) {
+  return typeof value === 'string' && value.trim().toLowerCase() === 'finished';
+}
+
 function buildWorkflowFieldState(params: {
   updates: Map<string, any>;
   receipts: Map<string, any>;
@@ -1420,6 +1424,7 @@ export async function GET(req: NextRequest) {
           }
         )
       );
+      const visibleRows = rows.filter((row: any) => !isFinishedWorkflowStatus(row.status));
 
       const tripCostValue =
         trip.organization_id === effectiveOrganizationId ? trip.price ?? null : null;
@@ -1444,7 +1449,7 @@ export async function GET(req: NextRequest) {
         groupCostState?.value_text !== null && groupCostState?.value_text !== undefined
           ? parseNumericText(groupCostState.value_text)
           : tripCostValue;
-      const effectiveRevenueValue = rows.reduce((sum: number | null, row: any) => {
+      const effectiveRevenueValue = visibleRows.reduce((sum: number | null, row: any) => {
         const value = parseNumericText(row.revenue_display);
         if (value === null) {
           return null;
@@ -1452,11 +1457,11 @@ export async function GET(req: NextRequest) {
 
         return (sum ?? 0) + value;
       }, 0);
-      const effectiveKgValue = rows.reduce(
+      const effectiveKgValue = visibleRows.reduce(
         (sum: number, row: any) => sum + (parseNumericText(row.kg_display) ?? 0),
         0
       );
-      const effectiveLdmValue = rows.reduce(
+      const effectiveLdmValue = visibleRows.reduce(
         (sum: number, row: any) => sum + (parseNumericText(row.ldm_display) ?? 0),
         0
       );
@@ -1468,6 +1473,14 @@ export async function GET(req: NextRequest) {
             : null,
           'EUR'
         );
+
+      if (isFinishedWorkflowStatus(groupStatusState?.value_text || (trip.status ?? null))) {
+        return null;
+      }
+
+      if (visibleRows.length === 0) {
+        return null;
+      }
 
       return {
         id: `groupage-${trip.id}`,
@@ -1496,7 +1509,7 @@ export async function GET(req: NextRequest) {
           ...(groupTripVehicleState ? { trip_vehicle: groupTripVehicleState } : {}),
         },
         trip_editable_by_current_user: trip.created_by === user.id,
-        rows,
+        rows: visibleRows,
         footer: {
           id: `groupage-footer-${trip.id}`,
           kg_value: effectiveKgValue,
@@ -1574,33 +1587,35 @@ export async function GET(req: NextRequest) {
         representedTripIds.add(linkedTrip.id);
       }
 
-      standaloneRows.push(
-        applyTripWorkflowStatesToRow(
-          applyOrderWorkflowStatesToRow(
-            buildOrderRow({
-              order,
-              effectiveOrganizationId,
-              sourceOrganizationMap,
+      const row = applyTripWorkflowStatesToRow(
+        applyOrderWorkflowStatesToRow(
+          buildOrderRow({
+            order,
+            effectiveOrganizationId,
+            sourceOrganizationMap,
+            linkedTrip,
+            currentUserId: user.id,
+            visibilityMode: visibleOrderAccess.get(order.id as string) || 'full',
+            routePlan: buildRoutePlanForOrder({
+              orderId: order.id as string,
               linkedTrip,
-              currentUserId: user.id,
-              visibilityMode: visibleOrderAccess.get(order.id as string) || 'full',
-              routePlan: buildRoutePlanForOrder({
-                orderId: order.id as string,
-                linkedTrip,
-                orderTripLinksForOrder: linksByOrderId.get(order.id) || [],
-              }),
-              routeSteps: buildRouteStepsForOrder({
-                orderTripLinksForOrder: linksByOrderId.get(order.id) || [],
-              }),
-            })
-          ),
-          {
-            includeStatus: false,
-            includeCost: true,
-            includeTripVehicle: true,
-          }
-        )
+              orderTripLinksForOrder: linksByOrderId.get(order.id) || [],
+            }),
+            routeSteps: buildRouteStepsForOrder({
+              orderTripLinksForOrder: linksByOrderId.get(order.id) || [],
+            }),
+          })
+        ),
+        {
+          includeStatus: false,
+          includeCost: true,
+          includeTripVehicle: true,
+        }
       );
+
+      if (!isFinishedWorkflowStatus(row.status)) {
+        standaloneRows.push(row);
+      }
     }
 
     const standaloneTrips = Array.from(visibleTripIdSet)
@@ -1639,36 +1654,38 @@ export async function GET(req: NextRequest) {
         .find(Boolean) || null;
       const relatedOrder = trip.is_groupage ? null : firstLinkedOrder;
 
-      standaloneRows.push(
-        applyTripWorkflowStatesToRow(
-          applyOrderWorkflowStatesToRow(
-            buildTripRow({
-              trip,
-              effectiveOrganizationId,
-              relatedOrder,
-              sourceOrganizationMap,
-              currentUserId: user.id,
-              routePlan:
-                relatedOrder
-                  ? buildRoutePlanForOrder({
-                      orderId: relatedOrder.id as string,
-                      linkedTrip: trip,
-                      orderTripLinksForOrder: (linksByOrderId.get(relatedOrder.id) || []).filter(
-                        (link: any) => link.trip_id === trip.id
-                      ),
-                    })
-                  : null,
-            })
-          ),
-          {
-            includeStatus: true,
-            includeContact: true,
-            includeCost: true,
-            includeProfit: true,
-            includeTripVehicle: true,
-          }
-        )
+      const row = applyTripWorkflowStatesToRow(
+        applyOrderWorkflowStatesToRow(
+          buildTripRow({
+            trip,
+            effectiveOrganizationId,
+            relatedOrder,
+            sourceOrganizationMap,
+            currentUserId: user.id,
+            routePlan:
+              relatedOrder
+                ? buildRoutePlanForOrder({
+                    orderId: relatedOrder.id as string,
+                    linkedTrip: trip,
+                    orderTripLinksForOrder: (linksByOrderId.get(relatedOrder.id) || []).filter(
+                      (link: any) => link.trip_id === trip.id
+                    ),
+                  })
+                : null,
+          })
+        ),
+        {
+          includeStatus: true,
+          includeContact: true,
+          includeCost: true,
+          includeProfit: true,
+          includeTripVehicle: true,
+        }
       );
+
+      if (!isFinishedWorkflowStatus(row.status)) {
+        standaloneRows.push(row);
+      }
     }
 
     standaloneRows.sort((left, right) =>

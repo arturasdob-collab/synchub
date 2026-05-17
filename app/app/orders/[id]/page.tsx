@@ -52,6 +52,7 @@ type OrderDetails = {
   internal_order_number: string;
   client_order_number: string;
   status: (typeof orderStatusOptions)[number];
+  can_return_to_workflow?: boolean;
   can_view_financials: boolean;
   loading_date: string | null;
   loading_time_from: string | null;
@@ -242,8 +243,18 @@ type CargoLegRow = {
     dimensions_checked: boolean;
     cargo_matches: boolean;
     damaged_reported: boolean;
+    created_by: string | null;
+    updated_by: string | null;
     created_at: string | null;
     updated_at: string | null;
+    created_by_user: {
+      first_name: string | null;
+      last_name: string | null;
+    } | null;
+    updated_by_user: {
+      first_name: string | null;
+      last_name: string | null;
+    } | null;
   } | null;
 };
 
@@ -692,6 +703,20 @@ function formatExecutionTimeValue(
   return [fromPart, toPart].filter(Boolean).join('-') || null;
 }
 
+function formatHistoryTimestamp(value?: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date.toLocaleString();
+}
+
 function getCargoLegExecutionTimeLabel(legType: CargoLegType) {
   switch (legType) {
     case 'collection':
@@ -1088,6 +1113,7 @@ export default function OrderPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [returningToWorkflow, setReturningToWorkflow] = useState(false);
   const [editing, setEditing] = useState(false);
   const [activeCargoTab, setActiveCargoTab] =
     useState<CargoSectionTabId | null>(null);
@@ -2705,6 +2731,45 @@ export default function OrderPage() {
     }
   };
 
+  const returnToWorkflow = async () => {
+    const confirmed = window.confirm(
+      'Are you sure you want to return this order to workflow?'
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setReturningToWorkflow(true);
+
+      const res = await fetch('/api/workflow/field/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          record_type: 'order',
+          record_id: orderId,
+          field_key: 'status',
+          value_text: 'active',
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to return order to workflow');
+        return;
+      }
+
+      toast.success('Order returned to workflow');
+      await fetchOrder();
+    } catch (error) {
+      toast.error('Unexpected error');
+    } finally {
+      setReturningToWorkflow(false);
+    }
+  };
+
   const deleteOrder = async () => {
     const confirmed = window.confirm(
       `Delete order ${order?.internal_order_number || ''}?`
@@ -3457,6 +3522,16 @@ export default function OrderPage() {
               >
                 {formatOrderStatusLabel(order.status)}
               </span>
+              {!editing && order.status === 'finished' && order.can_return_to_workflow ? (
+                <button
+                  type="button"
+                  onClick={returnToWorkflow}
+                  disabled={returningToWorkflow}
+                  className="inline-flex items-center rounded-md border px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {returningToWorkflow ? 'Returning...' : 'Return to workflow'}
+                </button>
+              ) : null}
             </div>
             <div className="flex flex-col items-center gap-y-2 text-sm text-slate-500 md:flex-row md:justify-center md:gap-x-10">
               <div className="space-y-1 text-center whitespace-nowrap md:text-left">
@@ -4576,6 +4651,38 @@ export default function OrderPage() {
                                     <div className="mt-1 whitespace-pre-wrap text-[11px] text-slate-600">
                                       <span className="font-medium text-slate-700">Notes:</span>{' '}
                                       {cargoLeg.execution_detail.manager_notes}
+                                    </div>
+                                  ) : null}
+
+                                  {formatPerson(cargoLeg.execution_detail.created_by_user) !== '-' ||
+                                  formatHistoryTimestamp(cargoLeg.execution_detail.created_at) ? (
+                                    <div className="mt-1 text-[11px] text-slate-500">
+                                      <span className="font-medium text-slate-700">
+                                        Recorded:
+                                      </span>{' '}
+                                      {formatPerson(cargoLeg.execution_detail.created_by_user)}
+                                      {formatHistoryTimestamp(cargoLeg.execution_detail.created_at)
+                                        ? ` at ${formatHistoryTimestamp(cargoLeg.execution_detail.created_at)}`
+                                        : ''}
+                                    </div>
+                                  ) : null}
+
+                                  {((cargoLeg.execution_detail.updated_at &&
+                                    cargoLeg.execution_detail.updated_at !==
+                                      cargoLeg.execution_detail.created_at) ||
+                                    (cargoLeg.execution_detail.updated_by &&
+                                      cargoLeg.execution_detail.updated_by !==
+                                        cargoLeg.execution_detail.created_by)) &&
+                                  (formatPerson(cargoLeg.execution_detail.updated_by_user) !== '-' ||
+                                    formatHistoryTimestamp(cargoLeg.execution_detail.updated_at)) ? (
+                                    <div className="mt-0.5 text-[11px] text-slate-500">
+                                      <span className="font-medium text-slate-700">
+                                        Updated:
+                                      </span>{' '}
+                                      {formatPerson(cargoLeg.execution_detail.updated_by_user)}
+                                      {formatHistoryTimestamp(cargoLeg.execution_detail.updated_at)
+                                        ? ` at ${formatHistoryTimestamp(cargoLeg.execution_detail.updated_at)}`
+                                        : ''}
                                     </div>
                                   ) : null}
                                 </div>

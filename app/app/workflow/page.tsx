@@ -5770,6 +5770,21 @@ export default function WorkflowPage() {
       return;
     }
 
+    if (
+      editingCell.edit_kind === 'workflow_field' &&
+      editingCell.field_key === 'status' &&
+      editingValue.trim() === 'finished'
+    ) {
+      const confirmed = window.confirm(
+        'Are you sure this item is finished and should be removed from workflow?'
+      );
+
+      if (!confirmed) {
+        cancelEditingCell();
+        return;
+      }
+    }
+
     try {
       setSavingField(true);
 

@@ -215,6 +215,11 @@ export async function GET(req: NextRequest) {
 
     const orderPayload: any = {
       ...(data as any),
+      can_return_to_workflow:
+        order.created_by === user.id ||
+        profile.is_super_admin === true ||
+        profile.is_creator === true ||
+        ['OWNER', 'ADMIN'].includes(profile.role ?? ''),
       can_view_financials: isSameOrganization,
       client_order_number:
         !isSameOrganization
