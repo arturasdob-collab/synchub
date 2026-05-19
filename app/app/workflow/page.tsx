@@ -59,6 +59,14 @@ type WorkflowRouteStepDisplay = {
   summary: string;
 };
 
+type WorkflowRouteSteps = {
+  collection: WorkflowRouteStepDisplay | null;
+  reloading_before: WorkflowRouteStepDisplay | null;
+  international: WorkflowRouteStepDisplay | null;
+  reloading_after: WorkflowRouteStepDisplay | null;
+  distribution: WorkflowRouteStepDisplay | null;
+};
+
 type WorkflowStandaloneRow = {
   row_type: 'order_row' | 'trip_row';
   id: string;
@@ -103,7 +111,7 @@ type WorkflowStandaloneRow = {
   open_order_id: string | null;
   open_trip_id: string | null;
   route_plan?: WorkflowRoutePlan | null;
-  route_steps?: Partial<Record<WorkflowRouteEditorStepKey, WorkflowRouteStepDisplay | null>> | null;
+  route_steps?: WorkflowRouteSteps | null;
   field_states: WorkflowFieldStateMap;
   trip_editable_by_current_user?: boolean;
 };
@@ -405,6 +413,38 @@ type WorkflowCollectionEditorState = {
 };
 
 type WorkflowRouteEditorStepKey = WorkflowCollectionEditorState['step_key'];
+
+type WorkflowInternationalRouteDetailsState = {
+  row_id: string;
+  order_id: string;
+  linked_trip_id: string | null;
+  linked_trip_number: string;
+  carrier_name: string | null;
+  manager_name: string | null;
+  cargo_leg: WorkflowCargoLegRow | null;
+  matched_trip: WorkflowRouteTripOption | null;
+  can_edit: boolean;
+  step_status: string;
+  execution_date: string;
+  execution_time_from: string;
+  execution_time_to: string;
+  transport_price: string;
+  truck_plate: string;
+  trailer_plate: string;
+  driver_name: string;
+  driver_phone: string;
+  manager_notes: string;
+  trip_details: {
+    status: string | null;
+    price: number | null;
+    notes: string | null;
+    workflow_prep_date: string | null;
+    workflow_prep_time_from: string | null;
+    workflow_prep_time_to: string | null;
+    workflow_prep_display: string | null;
+    workflow_delivery_display: string | null;
+  } | null;
+};
 
 const WORKFLOW_ROUTE_STEP_STATUS_OPTIONS = [
   { value: '', label: 'Not set' },
@@ -729,6 +769,28 @@ function formatManagerLabel(
   return value || '-';
 }
 
+function normalizeLinkedTripToRouteOption(
+  linkedTrip: WorkflowLinkedTripRow | null | undefined
+): WorkflowRouteTripOption | null {
+  if (!linkedTrip) {
+    return null;
+  }
+
+  return {
+    id: linkedTrip.trip_id,
+    organization_id: linkedTrip.organization_id,
+    trip_number: linkedTrip.trip_number,
+    status: linkedTrip.status,
+    driver_name: linkedTrip.driver_name,
+    truck_plate: linkedTrip.truck_plate,
+    trailer_plate: linkedTrip.trailer_plate,
+    is_groupage: linkedTrip.is_groupage,
+    created_by: linkedTrip.created_by,
+    created_by_user: linkedTrip.created_by_user,
+    carrier: linkedTrip.carrier,
+  };
+}
+
 function formatOrganizationLocation(organization: {
   address?: string | null;
   city?: string | null;
@@ -804,6 +866,20 @@ function formatWorkflowPostInternationalReloadingMode(
 
 function getWorkflowRouteEditorLabel(stepKey: WorkflowRouteEditorStepKey) {
   return WORKFLOW_ROUTE_EDITOR_CONFIG[stepKey].label;
+}
+
+function getWorkflowRouteExecutionDateLabel(stepKey: WorkflowRouteEditorStepKey) {
+  switch (stepKey) {
+    case 'collection':
+      return 'Collection date';
+    case 'reloading_before':
+    case 'reloading_after':
+      return 'Reloading date';
+    case 'distribution':
+      return 'Distribution date';
+    default:
+      return 'Route date';
+  }
 }
 
 function getWorkflowRouteEditorModeOptions(stepKey: WorkflowRouteEditorStepKey) {
@@ -1029,6 +1105,16 @@ function formatWorkflowInternationalPlan(routePlan: WorkflowRoutePlan | null | u
   return routePlan.international_trip_number || 'Not linked';
 }
 
+function formatWorkflowInternationalCellValue(row: WorkflowStandaloneRow) {
+  const summary = row.route_steps?.international?.summary?.trim();
+
+  if (summary) {
+    return summary;
+  }
+
+  return formatWorkflowInternationalPlan(row.route_plan);
+}
+
 function formatWorkflowRouteStepSummary(
   row: WorkflowStandaloneRow,
   stepKey: WorkflowRouteEditorStepKey
@@ -1183,7 +1269,7 @@ function buildStandaloneSearchText(row: WorkflowStandaloneRow) {
     row.kind,
     formatWorkflowCollectionMode(row.route_plan?.collection_mode),
     formatWorkflowReloadingMode(row.route_plan?.reloading_mode),
-    formatWorkflowInternationalPlan(row.route_plan),
+    formatWorkflowInternationalCellValue(row),
     formatWorkflowDistributionMode(row.route_plan?.distribution_mode),
     formatWorkflowPostInternationalReloadingMode(
       row.route_plan?.post_international_reloading_mode
@@ -1224,7 +1310,7 @@ function buildGroupSearchText(group: WorkflowGroup) {
     group.vehicle_display,
     group.cost_display,
     group.rows.length > 0
-      ? formatWorkflowInternationalPlan(group.rows[0]?.route_plan)
+      ? formatWorkflowInternationalCellValue(group.rows[0]!)
       : '',
   ]
     .filter(Boolean)
@@ -2278,6 +2364,453 @@ function WorkflowCollectionRouteEditor({
   );
 }
 
+function WorkflowInternationalRouteDetailsOverlay({
+  details,
+  documents,
+  visibleDocumentZones,
+  documentsLoading,
+  documentsUploading,
+  documentDeletingId,
+  saving,
+  onOpenTrip,
+  onChange,
+  onSave,
+  onUploadDocument,
+  onDeleteDocument,
+  onCancel,
+}: {
+  details: WorkflowInternationalRouteDetailsState;
+  documents: WorkflowCargoLegDocumentRow[];
+  visibleDocumentZones: CargoLegDocumentZone[];
+  documentsLoading: boolean;
+  documentsUploading: boolean;
+  documentDeletingId: string;
+  saving: boolean;
+  onOpenTrip: (tripId: string) => void;
+  onChange: (
+    patch: Partial<
+      Pick<
+        WorkflowInternationalRouteDetailsState,
+        | 'step_status'
+        | 'execution_date'
+        | 'execution_time_from'
+        | 'execution_time_to'
+        | 'transport_price'
+        | 'truck_plate'
+        | 'trailer_plate'
+        | 'driver_name'
+        | 'driver_phone'
+        | 'manager_notes'
+      >
+    >
+  ) => void;
+  onSave: () => void;
+  onUploadDocument: (
+    documentZone: CargoLegDocumentZone,
+    files: FileList | null
+  ) => void;
+  onDeleteDocument: (documentId: string) => void;
+  onCancel: () => void;
+}) {
+  const execution = details.cargo_leg?.execution_detail || null;
+  const canEdit = details.can_edit;
+  const controlsDisabled = !canEdit || saving;
+  const documentsByZone = visibleDocumentZones.reduce(
+    (acc, zone) => {
+      acc[zone] = documents.filter((document) => document.document_zone === zone);
+      return acc;
+    },
+    {} as Record<CargoLegDocumentZone, WorkflowCargoLegDocumentRow[]>
+  );
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/15 px-4 py-16 backdrop-blur-[1px]"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onCancel();
+        }
+      }}
+    >
+      <div className="w-full max-w-2xl rounded-2xl border border-sky-200 bg-white shadow-2xl">
+        <div className="border-b border-slate-200 px-4 py-3">
+          <div className="text-sm font-semibold text-slate-900">International trip details</div>
+          <div className="text-xs text-slate-500">
+            Transport manager information from the linked international trip.
+          </div>
+        </div>
+        <div className="space-y-3 p-4">
+          <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                Mode
+              </label>
+              <div className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800">
+                International trip
+              </div>
+            </div>
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                Managers / All
+              </label>
+              <div className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800">
+                {details.manager_name ||
+                  formatManagerLabel(details.matched_trip?.created_by_user) ||
+                  '-'}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                Organization
+              </label>
+              <div className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800">
+                {details.carrier_name ||
+                  details.matched_trip?.carrier?.name ||
+                  details.cargo_leg?.responsible_organization?.name ||
+                  '-'}
+              </div>
+            </div>
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                Trip number
+              </label>
+              <div className="flex gap-2">
+                <div className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800">
+                  {details.linked_trip_number || '-'}
+                </div>
+                {details.linked_trip_id ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenTrip(details.linked_trip_id!)}
+                    className="shrink-0 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700"
+                  >
+                    Open trip
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          {!canEdit ? (
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+              This international trip information can be edited by the trip creator, the responsible route manager, or a higher access level.
+            </div>
+          ) : null}
+
+          <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
+            <div className="space-y-1">
+              <div className="font-medium text-slate-900">
+                {details.linked_trip_number || '-'}
+              </div>
+              <div>
+                {details.carrier_name ||
+                  details.matched_trip?.carrier?.name ||
+                  details.cargo_leg?.responsible_organization?.name ||
+                  '-'}
+              </div>
+              <div className="text-slate-500">
+                {[
+                  details.manager_name ||
+                    formatManagerLabel(details.matched_trip?.created_by_user) ||
+                    '-',
+                  details.matched_trip?.driver_name || '',
+                  details.matched_trip?.truck_plate || '',
+                ]
+                  .filter((value) => !!value && value !== '-')
+                  .join(' / ') || '-'}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+            <div className="mb-2 text-[11px] font-semibold text-slate-900">
+              Route execution details
+            </div>
+            <div className="space-y-3">
+              {!execution ? (
+                <div className="rounded-md border border-dashed border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
+                  No separate international route execution details saved yet. Showing linked trip transport data below.
+                </div>
+              ) : null}
+
+              <div className="grid gap-2 md:grid-cols-[140px_minmax(0,1fr)]">
+                <div>
+                  <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                    Step status
+                  </label>
+                  <select
+                    value={details.step_status}
+                    onChange={(event) => onChange({ step_status: event.target.value })}
+                    disabled={controlsDisabled}
+                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs disabled:cursor-not-allowed disabled:bg-slate-100"
+                  >
+                    {WORKFLOW_ROUTE_STEP_STATUS_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid gap-2 md:grid-cols-[148px_84px_84px_120px]">
+                <div className="md:col-span-3 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                  Loading date
+                </div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                  Transport price
+                </div>
+              </div>
+              <div className="grid gap-2 md:grid-cols-[148px_84px_84px_120px]">
+                <div>
+                  <input
+                    type="date"
+                    value={details.execution_date}
+                    onChange={(event) => onChange({ execution_date: event.target.value })}
+                    disabled={controlsDisabled}
+                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs disabled:cursor-not-allowed disabled:bg-slate-100"
+                  />
+                </div>
+                <div>
+                  <input
+                    type="text"
+                    value={details.execution_time_from}
+                    onChange={(event) => onChange({ execution_time_from: event.target.value })}
+                    placeholder="08:30"
+                    disabled={controlsDisabled}
+                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs disabled:cursor-not-allowed disabled:bg-slate-100"
+                  />
+                </div>
+                <div>
+                  <input
+                    type="text"
+                    value={details.execution_time_to}
+                    onChange={(event) => onChange({ execution_time_to: event.target.value })}
+                    placeholder="16:30"
+                    disabled={controlsDisabled}
+                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs disabled:cursor-not-allowed disabled:bg-slate-100"
+                  />
+                </div>
+                <div>
+                  <input
+                    type="text"
+                    value={details.transport_price}
+                    onChange={(event) => onChange({ transport_price: event.target.value })}
+                    placeholder="0.00"
+                    disabled={controlsDisabled}
+                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs disabled:cursor-not-allowed disabled:bg-slate-100"
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.1fr)_124px]">
+                <div>
+                  <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                    Truck plate
+                  </label>
+                  <input
+                    type="text"
+                    value={details.truck_plate}
+                    onChange={(event) => onChange({ truck_plate: event.target.value })}
+                    disabled={controlsDisabled}
+                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs disabled:cursor-not-allowed disabled:bg-slate-100"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                    Trailer plate
+                  </label>
+                  <input
+                    type="text"
+                    value={details.trailer_plate}
+                    onChange={(event) => onChange({ trailer_plate: event.target.value })}
+                    disabled={controlsDisabled}
+                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs disabled:cursor-not-allowed disabled:bg-slate-100"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                    Driver
+                  </label>
+                  <input
+                    type="text"
+                    value={details.driver_name}
+                    onChange={(event) => onChange({ driver_name: event.target.value })}
+                    disabled={controlsDisabled}
+                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs disabled:cursor-not-allowed disabled:bg-slate-100"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                    Phone
+                  </label>
+                  <input
+                    type="text"
+                    value={details.driver_phone}
+                    onChange={(event) => onChange({ driver_phone: event.target.value })}
+                    disabled={controlsDisabled}
+                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs disabled:cursor-not-allowed disabled:bg-slate-100"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                  Notes
+                </label>
+                <textarea
+                  rows={2}
+                  value={details.manager_notes}
+                  onChange={(event) => onChange({ manager_notes: event.target.value })}
+                  placeholder="Extra information from the transport manager for this international step."
+                  disabled={controlsDisabled}
+                  className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs disabled:cursor-not-allowed disabled:bg-slate-100"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div>
+                <div className="text-[11px] font-semibold text-slate-900">Route documents</div>
+                <div className="text-[10px] text-slate-500">
+                  Customs, CMR, photos, and additional files from the international step.
+                </div>
+              </div>
+              {documentsLoading ? (
+                <div className="inline-flex items-center gap-1 text-[10px] text-slate-500">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Loading
+                </div>
+              ) : null}
+            </div>
+
+            {!details.cargo_leg?.id ? (
+              <div className="rounded-md border border-dashed border-slate-200 bg-white px-2 py-2 text-[11px] text-slate-500">
+                No saved international route step yet.
+              </div>
+            ) : (
+              <div className="grid gap-3 md:grid-cols-2">
+                {visibleDocumentZones.map((zone) => {
+                  const zoneDocuments = documentsByZone[zone] || [];
+
+                  return (
+                    <div key={zone} className="rounded-lg border border-slate-200 bg-white p-2.5">
+                      <div className="mb-2 flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="text-[11px] font-semibold text-slate-900">
+                            {CARGO_LEG_DOCUMENT_ZONE_LABELS[zone]}
+                          </div>
+                          <div className="text-[10px] leading-4 text-slate-500">
+                            {CARGO_LEG_DOCUMENT_ZONE_DESCRIPTIONS[zone]}
+                          </div>
+                        </div>
+                        {canEdit ? (
+                          <label className="shrink-0 cursor-pointer rounded-md border border-slate-300 bg-white px-2 py-1 text-[10px] font-medium text-slate-700 hover:bg-slate-50">
+                            Add file
+                            <input
+                              type="file"
+                              multiple
+                              accept={CARGO_LEG_DOCUMENT_ACCEPT_ATTRIBUTE}
+                              className="hidden"
+                              onChange={(event) => {
+                                onUploadDocument(zone, event.currentTarget.files);
+                                event.currentTarget.value = '';
+                              }}
+                              disabled={documentsUploading || saving}
+                            />
+                          </label>
+                        ) : null}
+                      </div>
+
+                      {zoneDocuments.length === 0 ? (
+                        <div className="rounded-md border border-dashed border-slate-200 px-2 py-3 text-center text-[10px] text-slate-400">
+                          No files yet.
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {zoneDocuments.map((document) => (
+                            <div
+                              key={document.id}
+                              className="rounded-md border border-slate-200 px-2 py-1.5"
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div
+                                    className="truncate text-[11px] font-medium text-slate-800"
+                                    title={document.original_file_name}
+                                  >
+                                    {document.original_file_name}
+                                  </div>
+                                  <div className="text-[10px] text-slate-500">
+                                    {formatOrderDocumentFileSize(document.file_size)} ·{' '}
+                                    {document.uploaded_by_organization_name || '-'}
+                                  </div>
+                                  <div className="text-[10px] text-slate-400">
+                                    {formatManagerLabel(document.created_by_user)}
+                                  </div>
+                                </div>
+                                <div className="flex shrink-0 items-center gap-1">
+                                  {document.signed_url ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => window.open(document.signed_url!, '_blank')}
+                                      className="rounded-md border border-slate-300 bg-white px-2 py-1 text-[10px] font-medium text-slate-700 hover:bg-slate-50"
+                                    >
+                                      Open
+                                    </button>
+                                  ) : null}
+                                  {canEdit && document.can_manage ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => onDeleteDocument(document.id)}
+                                      disabled={documentDeletingId === document.id}
+                                      className="rounded-md border border-red-200 bg-white px-2 py-1 text-[10px] font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                      {documentDeletingId === document.id ? '...' : 'Delete'}
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={saving}
+            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Close
+          </button>
+          {canEdit ? (
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={saving}
+              className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WorkflowCollectionRouteEditorOverlay({
   editor,
   organizations,
@@ -2343,7 +2876,7 @@ function WorkflowCollectionRouteEditorOverlay({
   const isReloadingStep =
     editor.step_key === 'reloading_before' || editor.step_key === 'reloading_after';
   const isTransportStep = !isReloadingStep;
-  const executionLabel = `${stepLabel} time`;
+  const executionLabel = getWorkflowRouteExecutionDateLabel(editor.step_key);
   const priceLabel = `${stepLabel} price`;
   const notesLabel = 'Notes';
   const notesPlaceholder = isReloadingStep
@@ -2576,46 +3109,59 @@ function WorkflowCollectionRouteEditorOverlay({
                   </div>
                 </div>
 
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                  {executionLabel}
+                <div className="grid gap-2 md:grid-cols-[148px_84px_84px_120px]">
+                  <div className="md:col-span-3 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                    {executionLabel}
+                  </div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                    {priceLabel}
+                  </div>
                 </div>
                 <div className="grid gap-2 md:grid-cols-[148px_84px_84px_120px]">
-                  <input
-                    type="date"
-                    value={editor.execution_date}
-                    onChange={(event) => onChange({ execution_date: event.target.value })}
-                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-                  />
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={5}
-                    placeholder="08:30"
-                    value={editor.execution_time_from}
-                    onChange={(event) =>
-                      onChange({ execution_time_from: event.target.value })
-                    }
-                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-                  />
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={5}
-                    placeholder="16:30"
-                    value={editor.execution_time_to}
-                    onChange={(event) =>
-                      onChange({ execution_time_to: event.target.value })
-                    }
-                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-                  />
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    placeholder={priceLabel}
-                    value={editor.transport_price}
-                    onChange={(event) => onChange({ transport_price: event.target.value })}
-                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-                  />
+                  <div>
+                    <input
+                      type="date"
+                      value={editor.execution_date}
+                      onChange={(event) => onChange({ execution_date: event.target.value })}
+                      className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={5}
+                      placeholder="08:30"
+                      value={editor.execution_time_from}
+                      onChange={(event) =>
+                        onChange({ execution_time_from: event.target.value })
+                      }
+                      className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={5}
+                      placeholder="16:30"
+                      value={editor.execution_time_to}
+                      onChange={(event) =>
+                        onChange({ execution_time_to: event.target.value })
+                      }
+                      className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="0.00"
+                      value={editor.transport_price}
+                      onChange={(event) => onChange({ transport_price: event.target.value })}
+                      className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -2892,6 +3438,7 @@ function WorkflowStandaloneRowView({
   customColumns,
   onOpenOrder,
   onOpenTrip,
+  onOpenInternationalRouteDetails,
   onAcknowledgeField,
   allowAcknowledge,
   editingCell,
@@ -2923,6 +3470,7 @@ function WorkflowStandaloneRowView({
   customColumns: WorkflowCustomColumn[];
   onOpenOrder: (orderId: string) => void;
   onOpenTrip: (tripId: string) => void;
+  onOpenInternationalRouteDetails: (row: WorkflowStandaloneRow) => void;
   onAcknowledgeField: (
     recordType: 'order' | 'trip',
     recordId: string,
@@ -3180,14 +3728,18 @@ function WorkflowStandaloneRowView({
         {row.route_plan?.international_trip_id ? (
           <button
             type="button"
-            onClick={() => onOpenTrip(row.route_plan!.international_trip_id!)}
+            onClick={() =>
+              row.order_id && row.row_type !== 'trip_row'
+                ? onOpenInternationalRouteDetails(row)
+                : onOpenTrip(row.route_plan!.international_trip_id!)
+            }
             className="block w-full text-left"
-            title={formatWorkflowInternationalPlan(row.route_plan)}
+            title={formatWorkflowInternationalCellValue(row)}
           >
-            <CompactCell value={formatWorkflowInternationalPlan(row.route_plan)} scrollable />
+            <CompactCell value={formatWorkflowInternationalCellValue(row)} scrollable />
           </button>
         ) : (
-          <CompactCell value={formatWorkflowInternationalPlan(row.route_plan)} scrollable />
+          <CompactCell value={formatWorkflowInternationalCellValue(row)} scrollable />
         )}
       </td>
     ),
@@ -3595,6 +4147,7 @@ function GroupageBlock({
   headerScope,
   onOpenOrder,
   onOpenTrip,
+  onOpenInternationalRouteDetails,
   onAcknowledgeField,
   allowAcknowledge,
   filters,
@@ -3642,6 +4195,7 @@ function GroupageBlock({
   headerScope: string;
   onOpenOrder: (orderId: string) => void;
   onOpenTrip: (tripId: string) => void;
+  onOpenInternationalRouteDetails: (row: WorkflowStandaloneRow) => void;
   onAcknowledgeField: (
     recordType: 'order' | 'trip',
     recordId: string,
@@ -4078,6 +4632,7 @@ function GroupageBlock({
               customColumns={customColumns}
               onOpenOrder={onOpenOrder}
               onOpenTrip={onOpenTrip}
+              onOpenInternationalRouteDetails={onOpenInternationalRouteDetails}
               onAcknowledgeField={onAcknowledgeField}
               allowAcknowledge={allowAcknowledge}
               editingCell={editingCell}
@@ -4205,6 +4760,10 @@ export default function WorkflowPage() {
     useState(false);
   const [collectionRouteDocumentDeletingId, setCollectionRouteDocumentDeletingId] =
     useState('');
+  const [internationalRouteDetails, setInternationalRouteDetails] =
+    useState<WorkflowInternationalRouteDetailsState | null>(null);
+  const [internationalRouteDetailsSaving, setInternationalRouteDetailsSaving] =
+    useState(false);
 
   useEffect(() => {
     void fetchWorkflow();
@@ -4937,6 +5496,16 @@ export default function WorkflowPage() {
     setCollectionRouteDocumentDeletingId('');
   };
 
+  const resetInternationalRouteDetails = () => {
+    setCollectionRouteDocuments([]);
+    setCollectionRouteVisibleDocumentZones([...CARGO_LEG_DOCUMENT_ZONES]);
+    setCollectionRouteDocumentsLoading(false);
+    setCollectionRouteDocumentsUploading(false);
+    setCollectionRouteDocumentDeletingId('');
+    setInternationalRouteDetailsSaving(false);
+    setInternationalRouteDetails(null);
+  };
+
   const closeCollectionRouteEditor = () => {
     if (collectionRouteEditorSaving || collectionRouteEditorLoading) {
       return;
@@ -4997,11 +5566,12 @@ export default function WorkflowPage() {
     }
   };
 
-  const uploadCollectionRouteDocuments = async (
+  const uploadCargoLegDocuments = async (
+    cargoLegId: string,
     documentZone: CargoLegDocumentZone,
     files: FileList | null
   ) => {
-    if (!collectionRouteEditor?.cargo_leg_id || !files || files.length === 0) {
+    if (!cargoLegId || !files || files.length === 0) {
       return;
     }
 
@@ -5011,7 +5581,7 @@ export default function WorkflowPage() {
 
       for (const file of Array.from(files)) {
         const formData = new FormData();
-        formData.set('cargo_leg_id', collectionRouteEditor.cargo_leg_id);
+        formData.set('cargo_leg_id', cargoLegId);
         formData.set('document_zone', documentZone);
         formData.set('file', file);
 
@@ -5034,7 +5604,7 @@ export default function WorkflowPage() {
         toast.success(
           `${CARGO_LEG_DOCUMENT_ZONE_LABELS[documentZone]} saved: ${uploadedCount}`
         );
-        await loadCollectionRouteDocuments(collectionRouteEditor.cargo_leg_id);
+        await loadCollectionRouteDocuments(cargoLegId);
       }
     } catch (error) {
       toast.error('Failed to upload route documents');
@@ -5043,7 +5613,37 @@ export default function WorkflowPage() {
     }
   };
 
-  const deleteCollectionRouteDocument = async (documentId: string) => {
+  const uploadCollectionRouteDocuments = async (
+    documentZone: CargoLegDocumentZone,
+    files: FileList | null
+  ) => {
+    if (!collectionRouteEditor?.cargo_leg_id) {
+      return;
+    }
+
+    await uploadCargoLegDocuments(
+      collectionRouteEditor.cargo_leg_id,
+      documentZone,
+      files
+    );
+  };
+
+  const uploadInternationalRouteDocuments = async (
+    documentZone: CargoLegDocumentZone,
+    files: FileList | null
+  ) => {
+    if (!internationalRouteDetails?.cargo_leg?.id) {
+      return;
+    }
+
+    await uploadCargoLegDocuments(
+      internationalRouteDetails.cargo_leg.id,
+      documentZone,
+      files
+    );
+  };
+
+  const deleteCargoLegDocument = async (documentId: string, cargoLegId: string) => {
     try {
       setCollectionRouteDocumentDeletingId(documentId);
 
@@ -5063,14 +5663,248 @@ export default function WorkflowPage() {
       }
 
       toast.success('Route document deleted');
-
-      if (collectionRouteEditor?.cargo_leg_id) {
-        await loadCollectionRouteDocuments(collectionRouteEditor.cargo_leg_id);
-      }
+      await loadCollectionRouteDocuments(cargoLegId);
     } catch (error) {
       toast.error('Failed to delete route document');
     } finally {
       setCollectionRouteDocumentDeletingId('');
+    }
+  };
+
+  const deleteCollectionRouteDocument = async (documentId: string) => {
+    if (!collectionRouteEditor?.cargo_leg_id) {
+      return;
+    }
+
+    await deleteCargoLegDocument(documentId, collectionRouteEditor.cargo_leg_id);
+  };
+
+  const deleteInternationalRouteDocument = async (documentId: string) => {
+    if (!internationalRouteDetails?.cargo_leg?.id) {
+      return;
+    }
+
+    await deleteCargoLegDocument(documentId, internationalRouteDetails.cargo_leg.id);
+  };
+
+  const closeInternationalRouteDetails = () => {
+    if (internationalRouteDetailsSaving) {
+      return;
+    }
+
+    resetInternationalRouteDetails();
+  };
+
+  const updateInternationalRouteDetails = (
+    patch: Partial<
+      Pick<
+        WorkflowInternationalRouteDetailsState,
+        | 'step_status'
+        | 'execution_date'
+        | 'execution_time_from'
+        | 'execution_time_to'
+        | 'transport_price'
+        | 'truck_plate'
+        | 'trailer_plate'
+        | 'driver_name'
+        | 'driver_phone'
+        | 'manager_notes'
+      >
+    >
+  ) => {
+    setInternationalRouteDetails((prev) =>
+      prev
+        ? {
+            ...prev,
+            ...patch,
+          }
+        : prev
+    );
+  };
+
+  const openInternationalRouteDetails = async (row: WorkflowStandaloneRow) => {
+    if (!row.order_id || !row.route_plan?.international_trip_id) {
+      return;
+    }
+
+    try {
+      setEditingCell(null);
+      setEditingValue('');
+
+      const searchParams = new URLSearchParams();
+      searchParams.set('orderId', row.order_id);
+
+      const res = await fetch(
+        `/api/orders/link-trip-options?${searchParams.toString()}`,
+        {
+          method: 'GET',
+        }
+      );
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to load international trip details');
+        return;
+      }
+
+      const linkedTrips = (data.linked_trips || []) as WorkflowLinkedTripRow[];
+      const activeLinkedTrip =
+        linkedTrips.find(
+          (linkedTrip) => linkedTrip.trip_id === row.route_plan?.international_trip_id
+        ) ||
+        linkedTrips.find((linkedTrip) => linkedTrip.trip_id === row.trip_id) ||
+        linkedTrips[0] ||
+        null;
+
+      if (!activeLinkedTrip) {
+        toast.error('Linked international trip details are not available');
+        return;
+      }
+
+      const internationalCargoLeg =
+        activeLinkedTrip.cargo_legs.find((cargoLeg) => cargoLeg.leg_type === 'international_trip') ||
+        null;
+      const matchedTrip =
+        internationalCargoLeg?.linked_trip ||
+        normalizeLinkedTripToRouteOption(activeLinkedTrip);
+      let tripDetails: WorkflowInternationalRouteDetailsState['trip_details'] = null;
+
+      if (activeLinkedTrip.trip_id) {
+        const tripDetailsRes = await fetch(
+          `/api/trips/details?tripId=${encodeURIComponent(activeLinkedTrip.trip_id)}`,
+          {
+            method: 'GET',
+          }
+        );
+        const tripDetailsData = await tripDetailsRes.json();
+
+        if (tripDetailsRes.ok && tripDetailsData?.trip) {
+          tripDetails = {
+            status:
+              typeof tripDetailsData.trip.status === 'string'
+                ? tripDetailsData.trip.status
+                : null,
+            price:
+              typeof tripDetailsData.trip.price === 'number'
+                ? tripDetailsData.trip.price
+                : null,
+            notes:
+              typeof tripDetailsData.trip.notes === 'string'
+                ? tripDetailsData.trip.notes
+                : null,
+            workflow_prep_date:
+              typeof tripDetailsData.trip.workflow_prep_date === 'string'
+                ? tripDetailsData.trip.workflow_prep_date
+                : null,
+            workflow_prep_time_from:
+              typeof tripDetailsData.trip.workflow_prep_time_from === 'string'
+                ? tripDetailsData.trip.workflow_prep_time_from
+                : null,
+            workflow_prep_time_to:
+              typeof tripDetailsData.trip.workflow_prep_time_to === 'string'
+                ? tripDetailsData.trip.workflow_prep_time_to
+                : null,
+            workflow_prep_display:
+              typeof tripDetailsData.trip.workflow_prep_display === 'string'
+                ? tripDetailsData.trip.workflow_prep_display
+                : null,
+            workflow_delivery_display:
+              typeof tripDetailsData.trip.workflow_delivery_display === 'string'
+                ? tripDetailsData.trip.workflow_delivery_display
+                : null,
+          };
+        }
+      }
+
+      setCollectionRouteDocuments([]);
+      setCollectionRouteVisibleDocumentZones([...CARGO_LEG_DOCUMENT_ZONES]);
+
+      const fallbackStatus =
+        (internationalCargoLeg?.execution_detail?.step_status as string | null) ||
+        tripDetails?.status ||
+        matchedTrip?.status ||
+        '';
+      const fallbackPrice =
+        internationalCargoLeg?.execution_detail?.transport_price !== null &&
+        internationalCargoLeg?.execution_detail?.transport_price !== undefined
+          ? String(internationalCargoLeg.execution_detail.transport_price)
+          : tripDetails?.price !== null && tripDetails?.price !== undefined
+            ? String(tripDetails.price)
+            : '';
+      const fallbackNotes =
+        internationalCargoLeg?.execution_detail?.manager_notes ||
+        tripDetails?.notes ||
+        '';
+      const canEdit =
+        !!internationalCargoLeg?.id &&
+        (viewerIsElevated ||
+          matchedTrip?.created_by === viewerUserId ||
+          activeLinkedTrip.created_by === viewerUserId ||
+          internationalCargoLeg.organization_id === currentOrganizationId ||
+          (internationalCargoLeg.responsible_organization_id === currentOrganizationId &&
+            (internationalCargoLeg.show_to_all_managers ||
+              internationalCargoLeg.shared_managers.some(
+                (manager) => manager.id === viewerUserId
+              ))));
+
+      setInternationalRouteDetails({
+        row_id: row.id,
+        order_id: row.order_id,
+        linked_trip_id: activeLinkedTrip.trip_id || row.route_plan?.international_trip_id || null,
+        linked_trip_number:
+          matchedTrip?.trip_number ||
+          activeLinkedTrip.trip_number ||
+          row.route_plan?.international_trip_number ||
+          '-',
+        carrier_name:
+          matchedTrip?.carrier?.name ||
+          activeLinkedTrip.carrier?.name ||
+          row.route_steps?.international?.organization_name ||
+          null,
+        manager_name:
+          formatManagerLabel(matchedTrip?.created_by_user || activeLinkedTrip.created_by_user) !== '-'
+            ? formatManagerLabel(matchedTrip?.created_by_user || activeLinkedTrip.created_by_user)
+            : null,
+        cargo_leg: internationalCargoLeg,
+        matched_trip: matchedTrip,
+        can_edit: canEdit,
+        step_status: fallbackStatus,
+        execution_date:
+          internationalCargoLeg?.execution_detail?.planned_date ||
+          tripDetails?.workflow_prep_date ||
+          '',
+        execution_time_from:
+          internationalCargoLeg?.execution_detail?.planned_time_from ||
+          tripDetails?.workflow_prep_time_from ||
+          '',
+        execution_time_to:
+          internationalCargoLeg?.execution_detail?.planned_time_to ||
+          tripDetails?.workflow_prep_time_to ||
+          '',
+        transport_price: fallbackPrice,
+        truck_plate:
+          internationalCargoLeg?.execution_detail?.truck_plate ||
+          matchedTrip?.truck_plate ||
+          '',
+        trailer_plate:
+          internationalCargoLeg?.execution_detail?.trailer_plate ||
+          matchedTrip?.trailer_plate ||
+          '',
+        driver_name:
+          internationalCargoLeg?.execution_detail?.driver_name ||
+          matchedTrip?.driver_name ||
+          '',
+        driver_phone: internationalCargoLeg?.execution_detail?.driver_phone || '',
+        manager_notes: fallbackNotes,
+        trip_details: tripDetails,
+      });
+
+      if (internationalCargoLeg?.id) {
+        void loadCollectionRouteDocuments(internationalCargoLeg.id);
+      }
+    } catch (error) {
+      toast.error('Failed to load international trip details');
     }
   };
 
@@ -5275,6 +6109,65 @@ export default function WorkflowPage() {
       throw new Error(
         executionData.error || 'Failed to save route execution details'
       );
+    }
+  };
+
+  const saveInternationalRouteExecutionDetails = async () => {
+    if (
+      !internationalRouteDetails ||
+      !internationalRouteDetails.cargo_leg?.id ||
+      internationalRouteDetailsSaving
+    ) {
+      return;
+    }
+
+    try {
+      setInternationalRouteDetailsSaving(true);
+
+      const executionRes = await fetch('/api/cargo-legs/execution/upsert', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          cargo_leg_id: internationalRouteDetails.cargo_leg.id,
+          step_status: internationalRouteDetails.step_status || null,
+          planned_date: internationalRouteDetails.execution_date || null,
+          planned_time_from: internationalRouteDetails.execution_time_from || null,
+          planned_time_to: internationalRouteDetails.execution_time_to || null,
+          actual_date: null,
+          actual_time_from: null,
+          actual_time_to: null,
+          transport_price: internationalRouteDetails.transport_price || null,
+          truck_plate: internationalRouteDetails.truck_plate || null,
+          trailer_plate: internationalRouteDetails.trailer_plate || null,
+          driver_name: internationalRouteDetails.driver_name || null,
+          driver_phone: internationalRouteDetails.driver_phone || null,
+          manager_notes: internationalRouteDetails.manager_notes || null,
+          arrival_confirmed: false,
+          dimensions_checked: false,
+          cargo_matches: false,
+          damaged_reported: false,
+        }),
+      });
+
+      const executionData = await executionRes.json();
+
+      if (!executionRes.ok) {
+        toast.error(executionData.error || 'Failed to save international route details');
+        return;
+      }
+
+      toast.success('International route details saved');
+      resetInternationalRouteDetails();
+      void fetchWorkflow(
+        buildReloadParams().organizationId,
+        buildReloadParams().managerUserId
+      );
+    } catch (error) {
+      toast.error('Failed to save international route details');
+    } finally {
+      setInternationalRouteDetailsSaving(false);
     }
   };
 
@@ -6169,7 +7062,7 @@ export default function WorkflowPage() {
           filters.reloadingPlan
         ) &&
         matchesText(
-          formatWorkflowInternationalPlan(row.route_plan),
+          formatWorkflowInternationalCellValue(row),
           filters.internationalPlan
         ) &&
         matchesText(
@@ -6546,6 +7439,7 @@ export default function WorkflowPage() {
                 headerScope={`group-${group.id}`}
                 onOpenOrder={(orderId) => router.push(`/app/orders/${orderId}`)}
                 onOpenTrip={(tripId) => router.push(`/app/trips/${tripId}`)}
+                onOpenInternationalRouteDetails={openInternationalRouteDetails}
                 onAcknowledgeField={acknowledgeWorkflowField}
                 allowAcknowledge={canAcknowledgeWorkflow}
                 filters={filters}
@@ -6623,6 +7517,7 @@ export default function WorkflowPage() {
                         customColumns={customColumns}
                         onOpenOrder={(orderId) => router.push(`/app/orders/${orderId}`)}
                         onOpenTrip={(tripId) => router.push(`/app/trips/${tripId}`)}
+                        onOpenInternationalRouteDetails={openInternationalRouteDetails}
                         onAcknowledgeField={acknowledgeWorkflowField}
                         allowAcknowledge={canAcknowledgeWorkflow}
                         editingCell={editingCell}
@@ -6680,6 +7575,24 @@ export default function WorkflowPage() {
           onUploadDocument={uploadCollectionRouteDocuments}
           onDeleteDocument={deleteCollectionRouteDocument}
           onCancel={closeCollectionRouteEditor}
+        />
+      ) : null}
+
+      {internationalRouteDetails ? (
+        <WorkflowInternationalRouteDetailsOverlay
+          details={internationalRouteDetails}
+          documents={collectionRouteDocuments}
+          visibleDocumentZones={collectionRouteVisibleDocumentZones}
+          documentsLoading={collectionRouteDocumentsLoading}
+          documentsUploading={collectionRouteDocumentsUploading}
+          documentDeletingId={collectionRouteDocumentDeletingId}
+          saving={internationalRouteDetailsSaving}
+          onOpenTrip={(tripId) => router.push(`/app/trips/${tripId}`)}
+          onChange={updateInternationalRouteDetails}
+          onSave={saveInternationalRouteExecutionDetails}
+          onUploadDocument={uploadInternationalRouteDocuments}
+          onDeleteDocument={deleteInternationalRouteDocument}
+          onCancel={closeInternationalRouteDetails}
         />
       ) : null}
     </div>

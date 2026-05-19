@@ -9,6 +9,11 @@ import {
 } from '@/lib/server/order-trip-linking';
 import { canAccessTripViaCargoRoute } from '@/lib/server/cargo-legs';
 import { loadWorkflowFieldUpdates } from '@/lib/server/workflow-field-updates';
+import {
+  buildWorkflowScheduleValue,
+  formatWorkflowScheduleSummary,
+  parseWorkflowScheduleValueText,
+} from '@/lib/utils/workflow-schedule';
 
 function parseWorkflowNumericValue(value: string | null | undefined) {
   if (!value) {
@@ -197,6 +202,46 @@ export async function GET(req: NextRequest) {
     const costOverride = getWorkflowValue('cost');
     if (costOverride !== null) {
       tripPayload.price = parseWorkflowNumericValue(costOverride);
+    }
+
+    const prepOverride = getWorkflowValue('prep');
+    if (prepOverride !== null) {
+      const prepSchedule = parseWorkflowScheduleValueText(prepOverride);
+      tripPayload.workflow_prep_date = prepSchedule?.date ?? null;
+      tripPayload.workflow_prep_time_from = prepSchedule?.time_from ?? null;
+      tripPayload.workflow_prep_time_to = prepSchedule?.time_to ?? null;
+      tripPayload.workflow_prep_display = formatWorkflowScheduleSummary(
+        buildWorkflowScheduleValue({
+          date: prepSchedule?.date ?? null,
+          time_from: prepSchedule?.time_from ?? null,
+          time_to: prepSchedule?.time_to ?? null,
+        })
+      );
+    } else {
+      tripPayload.workflow_prep_date = null;
+      tripPayload.workflow_prep_time_from = null;
+      tripPayload.workflow_prep_time_to = null;
+      tripPayload.workflow_prep_display = null;
+    }
+
+    const deliveryOverride = getWorkflowValue('delivery');
+    if (deliveryOverride !== null) {
+      const deliverySchedule = parseWorkflowScheduleValueText(deliveryOverride);
+      tripPayload.workflow_delivery_date = deliverySchedule?.date ?? null;
+      tripPayload.workflow_delivery_time_from = deliverySchedule?.time_from ?? null;
+      tripPayload.workflow_delivery_time_to = deliverySchedule?.time_to ?? null;
+      tripPayload.workflow_delivery_display = formatWorkflowScheduleSummary(
+        buildWorkflowScheduleValue({
+          date: deliverySchedule?.date ?? null,
+          time_from: deliverySchedule?.time_from ?? null,
+          time_to: deliverySchedule?.time_to ?? null,
+        })
+      );
+    } else {
+      tripPayload.workflow_delivery_date = null;
+      tripPayload.workflow_delivery_time_from = null;
+      tripPayload.workflow_delivery_time_to = null;
+      tripPayload.workflow_delivery_display = null;
     }
 
     return NextResponse.json({

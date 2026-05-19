@@ -443,6 +443,8 @@ async function loadCargoLegTypesByOrderTripLinkId(
       responsible_organization_name: string | null;
       responsible_warehouse_name: string | null;
       linked_trip_number: string | null;
+      linked_trip_carrier_name: string | null;
+      linked_trip_manager_name: string | null;
     }>
   >();
 
@@ -465,7 +467,14 @@ async function loadCargoLegTypesByOrderTripLinkId(
         name
       ),
       linked_trip:linked_trip_id (
-        trip_number
+        trip_number,
+        carrier:carrier_company_id (
+          name
+        ),
+        created_by_user:created_by (
+          first_name,
+          last_name
+        )
       )
     `
     )
@@ -495,6 +504,12 @@ async function loadCargoLegTypesByOrderTripLinkId(
     const linkedTrip = Array.isArray((row as any).linked_trip)
       ? (row as any).linked_trip[0] ?? null
       : (row as any).linked_trip;
+    const linkedTripCarrier = Array.isArray(linkedTrip?.carrier)
+      ? linkedTrip?.carrier?.[0] ?? null
+      : linkedTrip?.carrier;
+    const linkedTripCreatedByUser = Array.isArray(linkedTrip?.created_by_user)
+      ? linkedTrip?.created_by_user?.[0] ?? null
+      : linkedTrip?.created_by_user;
     current.push({
       id: (row as any).id as string,
       leg_order:
@@ -508,6 +523,12 @@ async function loadCargoLegTypesByOrderTripLinkId(
         typeof responsibleWarehouse?.name === 'string' ? responsibleWarehouse.name : null,
       linked_trip_number:
         typeof linkedTrip?.trip_number === 'string' ? linkedTrip.trip_number : null,
+      linked_trip_carrier_name:
+        typeof linkedTripCarrier?.name === 'string' ? linkedTripCarrier.name : null,
+      linked_trip_manager_name:
+        typeof linkedTripCreatedByUser === 'object' && linkedTripCreatedByUser
+          ? `${linkedTripCreatedByUser.first_name || ''} ${linkedTripCreatedByUser.last_name || ''}`.trim() || null
+          : null,
     });
     cargoLegsByOrderTripLinkId.set(key, current);
   }
@@ -516,10 +537,23 @@ async function loadCargoLegTypesByOrderTripLinkId(
 }
 
 function buildRouteStepSummary(step: {
+  leg_type: string;
   responsible_organization_name: string | null;
   responsible_warehouse_name: string | null;
   linked_trip_number: string | null;
+  linked_trip_carrier_name: string | null;
+  linked_trip_manager_name: string | null;
 }) {
+  if (step.leg_type === 'international_trip') {
+    return [
+      step.linked_trip_carrier_name || step.responsible_organization_name || '-',
+      step.linked_trip_manager_name || '-',
+      step.linked_trip_number || '-',
+    ]
+      .filter((value) => !!value && value !== '-')
+      .join(' / ') || '-';
+  }
+
   const location = step.responsible_warehouse_name || step.responsible_organization_name || '-';
   const trip = step.linked_trip_number || '-';
   return `${location} / ${trip}`;
@@ -533,6 +567,8 @@ function buildWorkflowRouteStepDisplayMap(
     responsible_organization_name: string | null;
     responsible_warehouse_name: string | null;
     linked_trip_number: string | null;
+    linked_trip_carrier_name: string | null;
+    linked_trip_manager_name: string | null;
   }>
 ) {
   const sortedLegs = [...cargoLegs].sort(
@@ -545,6 +581,8 @@ function buildWorkflowRouteStepDisplayMap(
   );
   const collectionLeg =
     sortedLegs.find((cargoLeg) => cargoLeg.leg_type === 'collection') || null;
+  const internationalLeg =
+    sortedLegs.find((cargoLeg) => cargoLeg.leg_type === 'international_trip') || null;
   const reloadingBeforeLeg =
     internationalIndex >= 0
       ? sortedLegs.find(
@@ -571,6 +609,9 @@ function buildWorkflowRouteStepDisplayMap(
           responsible_organization_name: string | null;
           responsible_warehouse_name: string | null;
           linked_trip_number: string | null;
+          leg_type: string;
+          linked_trip_carrier_name: string | null;
+          linked_trip_manager_name: string | null;
         }
       | null
   ) =>
@@ -587,6 +628,7 @@ function buildWorkflowRouteStepDisplayMap(
   return {
     collection: createDisplay(collectionLeg),
     reloading_before: createDisplay(reloadingBeforeLeg),
+    international: createDisplay(internationalLeg),
     reloading_after: createDisplay(reloadingAfterLeg),
     distribution: createDisplay(distributionLeg),
   };
@@ -618,6 +660,13 @@ function buildOrderRow(params: {
       summary: string;
     } | null;
     reloading_before: {
+      cargo_leg_id: string;
+      organization_name: string | null;
+      warehouse_name: string | null;
+      linked_trip_number: string | null;
+      summary: string;
+    } | null;
+    international: {
       cargo_leg_id: string;
       organization_name: string | null;
       warehouse_name: string | null;
