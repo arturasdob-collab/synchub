@@ -1410,6 +1410,41 @@ export async function GET(req: NextRequest) {
       return buildWorkflowRouteStepDisplayMap(cargoLegs);
     };
 
+    const routeLinkedTripIds = new Set<string>();
+    const tripIdByNumber = new Map<string, string>();
+
+    for (const trip of Array.from(tripMap.values())) {
+      const tripNumber =
+        typeof trip?.trip_number === 'string' ? trip.trip_number.trim() : '';
+
+      if (!tripNumber || trip?.is_groupage || !trip?.id) {
+        continue;
+      }
+
+      tripIdByNumber.set(tripNumber, trip.id as string);
+    }
+
+    for (const cargoLegs of Array.from(cargoLegPlansByOrderTripLinkId.values())) {
+      for (const cargoLeg of cargoLegs) {
+        const linkedTripNumber =
+          typeof cargoLeg.linked_trip_number === 'string'
+            ? cargoLeg.linked_trip_number.trim()
+            : '';
+
+        if (!linkedTripNumber) {
+          continue;
+        }
+
+        const linkedTripId = tripIdByNumber.get(linkedTripNumber);
+
+        if (!linkedTripId) {
+          continue;
+        }
+
+        routeLinkedTripIds.add(linkedTripId);
+      }
+    }
+
     const groupageTrips = Array.from(tripMap.values())
       .filter((trip: any) => trip?.is_groupage && linksByTripId.has(trip.id))
       .sort((left: any, right: any) =>
@@ -1689,6 +1724,10 @@ export async function GET(req: NextRequest) {
       .filter((trip: any) => {
         if (trip.is_groupage) {
           return true;
+        }
+
+        if (routeLinkedTripIds.has(trip.id as string)) {
+          return false;
         }
 
         return !representedTripIds.has(trip.id);
