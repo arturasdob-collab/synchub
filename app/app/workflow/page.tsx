@@ -4,6 +4,7 @@ import {
   Fragment,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type FocusEvent as ReactFocusEvent,
@@ -53,9 +54,13 @@ type WorkflowFieldStateMap = Partial<
 
 type WorkflowRouteStepDisplay = {
   cargo_leg_id: string;
+  responsible_organization_id: string | null;
   organization_name: string | null;
   warehouse_name: string | null;
   linked_trip_number: string | null;
+  linked_trip_vehicle: string | null;
+  linked_trip_price?: number | null;
+  execution_transport_price?: number | null;
   summary: string;
 };
 
@@ -112,6 +117,7 @@ type WorkflowStandaloneRow = {
   open_trip_id: string | null;
   route_plan?: WorkflowRoutePlan | null;
   route_steps?: WorkflowRouteSteps | null;
+  visibility_mode?: 'full' | 'route';
   field_states: WorkflowFieldStateMap;
   trip_editable_by_current_user?: boolean;
 };
@@ -410,6 +416,9 @@ type WorkflowCollectionEditorState = {
   dimensions_checked: boolean;
   cargo_matches: boolean;
   damaged_reported: boolean;
+  can_edit_setup: boolean;
+  can_edit_execution: boolean;
+  can_manage_documents: boolean;
 };
 
 type WorkflowRouteEditorStepKey = WorkflowCollectionEditorState['step_key'];
@@ -449,6 +458,7 @@ type WorkflowInternationalRouteDetailsState = {
 const WORKFLOW_ROUTE_STEP_STATUS_OPTIONS = [
   { value: '', label: 'Not set' },
   { value: 'active', label: 'Active' },
+  { value: 'planned', label: 'Planned' },
   { value: 'at_loading_place', label: 'At loading place' },
   { value: 'at_customs', label: 'At customs' },
   { value: 'loaded', label: 'Loaded' },
@@ -465,6 +475,8 @@ function formatWorkflowRouteStepStatusLabel(value: string | null | undefined) {
   switch (value) {
     case 'active':
       return 'Active';
+    case 'planned':
+      return 'Planned';
     case 'at_loading_place':
       return 'At loading place';
     case 'at_customs':
@@ -488,6 +500,70 @@ function formatWorkflowRouteStepStatusLabel(value: string | null | undefined) {
     default:
       return 'Not set';
   }
+}
+
+const WORKFLOW_TIME_SELECT_OPTIONS = Array.from({ length: 96 }, (_, index) => {
+  const hours = Math.floor(index / 4);
+  const minutes = (index % 4) * 15;
+  const value = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+
+  return { value, label: value };
+});
+
+function canEditWorkflowRouteSetup(params: {
+  viewerIsElevated: boolean;
+  currentOrganizationId: string | null;
+  effectiveOrganizationId: string | null;
+}) {
+  if (params.viewerIsElevated) {
+    return true;
+  }
+
+  return (
+    !!params.currentOrganizationId &&
+    !!params.effectiveOrganizationId &&
+    params.currentOrganizationId === params.effectiveOrganizationId
+  );
+}
+
+function canEditWorkflowRouteExecution(params: {
+  viewerIsElevated: boolean;
+  currentOrganizationId: string | null;
+  effectiveOrganizationId: string | null;
+  viewerUserId: string | null;
+  cargoLeg:
+    | Pick<
+        WorkflowCargoLegRow,
+        'responsible_organization_id' | 'show_to_all_managers' | 'shared_managers'
+      >
+    | null
+    | undefined;
+}) {
+  if (
+    canEditWorkflowRouteSetup({
+      viewerIsElevated: params.viewerIsElevated,
+      currentOrganizationId: params.currentOrganizationId,
+      effectiveOrganizationId: params.effectiveOrganizationId,
+    })
+  ) {
+    return true;
+  }
+
+  if (
+    !params.cargoLeg ||
+    !params.currentOrganizationId ||
+    params.cargoLeg.responsible_organization_id !== params.currentOrganizationId
+  ) {
+    return false;
+  }
+
+  if (params.cargoLeg.show_to_all_managers) {
+    return true;
+  }
+
+  return params.cargoLeg.shared_managers.some(
+    (manager) => !!params.viewerUserId && manager.id === params.viewerUserId
+  );
 }
 
 type WorkflowFilters = {
@@ -614,28 +690,28 @@ const WORKFLOW_ROUTE_EDITOR_CONFIG = {
     routeMode: 'collection_trip',
     legType: 'collection',
     planKey: 'collection_mode',
-    emptyTripHint: 'Type existing trip number or create a new collection trip.',
+    emptyTripHint: 'Type existing route number or create a new collection route.',
   },
   reloading_before: {
     label: 'Reloading',
     routeMode: 'reloading',
     legType: 'reloading',
     planKey: 'reloading_mode',
-    emptyTripHint: 'Type existing trip number or create a new reloading trip.',
+    emptyTripHint: 'Type existing route number or create a new reloading route.',
   },
   reloading_after: {
     label: 'Reloading 2',
     routeMode: 'reloading',
     legType: 'reloading',
     planKey: 'post_international_reloading_mode',
-    emptyTripHint: 'Type existing trip number or create a new reloading trip.',
+    emptyTripHint: 'Type existing route number or create a new reloading route.',
   },
   distribution: {
     label: 'Distribution',
     routeMode: 'distribution_trip',
     legType: 'delivery',
     planKey: 'distribution_mode',
-    emptyTripHint: 'Type existing trip number or create a new distribution trip.',
+    emptyTripHint: 'Type existing route number or create a new distribution route.',
   },
 } as const;
 
@@ -670,6 +746,27 @@ const WORKFLOW_COLUMN_CONFIG = [
   defaultWidth: number;
   minWidth: number;
 }>;
+
+const COLLECTION_OPERATIONAL_VISIBLE_COLUMNS = new Set<WorkflowColumnId>([
+  'status',
+  'prep',
+  'delivery',
+  'record_number',
+  'kind',
+  'collection_plan',
+  'reloading_plan',
+  'company',
+  'contact',
+  'sender',
+  'loading',
+  'loading_customs',
+  'receiver',
+  'cargo',
+  'kg',
+  'ldm',
+  'cost',
+  'trip_vehicle',
+]);
 
 const DEFAULT_WORKFLOW_COLUMN_WIDTHS = WORKFLOW_COLUMN_CONFIG.reduce(
   (acc, column) => {
@@ -1368,7 +1465,7 @@ function isSameEditingCell(
 
 function buildRecordNumberDisplay(row: WorkflowStandaloneRow) {
   const values =
-    row.row_type === 'order_row'
+    row.row_type === 'order_row' && row.visibility_mode !== 'route'
       ? [row.record_number, row.client_order_number]
       : [row.record_number];
 
@@ -1377,6 +1474,21 @@ function buildRecordNumberDisplay(row: WorkflowStandaloneRow) {
     .filter((value, index, array) => value !== '' && array.indexOf(value) === index);
 
   return normalized.length > 0 ? normalized.join(' / ') : '-';
+}
+
+function isRouteOnlyWorkflowRow(row: WorkflowStandaloneRow) {
+  return row.visibility_mode === 'route';
+}
+
+function isCollectionRouteOnlyWorkflowRow(
+  row: WorkflowStandaloneRow,
+  currentOrganizationId: string
+) {
+  return (
+    isRouteOnlyWorkflowRow(row) &&
+    !!currentOrganizationId &&
+    row.route_steps?.collection?.responsible_organization_id === currentOrganizationId
+  );
 }
 
 function buildPendingFieldState(
@@ -1462,7 +1574,7 @@ function applyFieldUpdateToStandaloneRow(
       break;
     }
     case 'contact': {
-      if (fieldUpdate.record_type === 'order') {
+      if (fieldUpdate.record_type === 'order' && nextRow.visibility_mode !== 'route') {
         nextRow.contact_display = fieldUpdate.value_text || '-';
       } else if (nextRow.row_type === 'trip_row') {
         nextRow.contact_display = fieldUpdate.value_text || '-';
@@ -1854,6 +1966,7 @@ function WorkflowTableHeader({
   filters,
   columnOrder,
   customColumns,
+  collectionOperationalView = false,
   headerScope,
   activeHeaderFilter,
   activeHeaderScope,
@@ -1871,6 +1984,7 @@ function WorkflowTableHeader({
   filters: WorkflowFilters;
   columnOrder: WorkflowColumnOrder;
   customColumns: WorkflowCustomColumn[];
+  collectionOperationalView?: boolean;
   headerScope: string;
   activeHeaderFilter: WorkflowHeaderFilterId | null;
   activeHeaderScope: string | null;
@@ -2069,10 +2183,28 @@ function WorkflowTableHeader({
           </div>
       </WorkflowHeaderCell>
     ),
-    record_number: renderTextFilter('record_number', 'No. / Trip', 'recordNumber', 'w-44', 'Order, client or trip no.'),
+    record_number: renderTextFilter(
+      'record_number',
+      collectionOperationalView ? 'Route no.' : 'No. / Trip',
+      'recordNumber',
+      'w-44',
+      collectionOperationalView ? 'Route number' : 'Order, client or trip no.'
+    ),
     kind: renderTextFilter('kind', 'Kind', 'kind', 'w-32', 'Kind'),
-    collection_plan: renderTextFilter('collection_plan', 'Collection', 'collectionPlan', 'w-36', 'Collection'),
-    reloading_plan: renderTextFilter('reloading_plan', 'Reloading', 'reloadingPlan', 'w-36', 'Reloading'),
+    collection_plan: renderTextFilter(
+      'collection_plan',
+      collectionOperationalView ? 'Collection route' : 'Collection',
+      'collectionPlan',
+      'w-36',
+      collectionOperationalView ? 'Collection route' : 'Collection'
+    ),
+    reloading_plan: renderTextFilter(
+      'reloading_plan',
+      collectionOperationalView ? 'Reloading route' : 'Reloading',
+      'reloadingPlan',
+      'w-36',
+      collectionOperationalView ? 'Reloading route' : 'Reloading'
+    ),
     international_plan: renderTextFilter('international_plan', 'Intl trip', 'internationalPlan', 'w-40', 'Linked trip'),
     distribution_plan: renderTextFilter('distribution_plan', 'Distribution', 'distributionPlan', 'w-40', 'Distribution'),
     reloading_after_international_plan: renderTextFilter('reloading_after_international_plan', 'Reloading 2', 'reloadingAfterIntlPlan', 'w-40', 'Reloading after intl'),
@@ -2088,9 +2220,21 @@ function WorkflowTableHeader({
     kg: renderTextFilter('kg', 'KG', 'kg', 'w-32', 'KG'),
     ldm: renderTextFilter('ldm', 'LDM', 'ldm', 'w-32', 'LDM'),
     revenue: renderTextFilter('revenue', 'Revenue', 'revenue', 'w-36', 'Revenue'),
-    cost: renderTextFilter('cost', 'Cost', 'cost', 'w-36', 'Cost'),
+    cost: renderTextFilter(
+      'cost',
+      collectionOperationalView ? 'Collection cost' : 'Cost',
+      'cost',
+      'w-36',
+      collectionOperationalView ? 'Collection cost' : 'Cost'
+    ),
     profit: renderTextFilter('profit', 'Profit', 'profit', 'w-36', 'Profit'),
-    trip_vehicle: renderTextFilter('trip_vehicle', 'Trip / Vehicle', 'tripVehicle', 'w-44', 'Trip / Vehicle'),
+    trip_vehicle: renderTextFilter(
+      'trip_vehicle',
+      collectionOperationalView ? 'Collection vehicle' : 'Trip / Vehicle',
+      'tripVehicle',
+      'w-44',
+      collectionOperationalView ? 'Collection vehicle' : 'Trip / Vehicle'
+    ),
   };
 
   return (
@@ -2156,6 +2300,7 @@ function WorkflowDisplayCell({
     time_from: '',
     time_to: '',
   });
+  const scheduleEditorRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!scheduleEditor || !isEditing) {
@@ -2175,6 +2320,27 @@ function WorkflowDisplayCell({
     parsedSchedule?.time_to,
     scheduleEditor,
   ]);
+
+  useEffect(() => {
+    if (!scheduleEditor || !isEditing) {
+      return;
+    }
+
+    const handleOutsideMouseDown = (event: MouseEvent) => {
+      if (
+        scheduleEditorRef.current &&
+        !scheduleEditorRef.current.contains(event.target as Node)
+      ) {
+        onSubmitEdit?.();
+      }
+    };
+
+    document.addEventListener('mousedown', handleOutsideMouseDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideMouseDown);
+    };
+  }, [isEditing, onSubmitEdit, scheduleEditor]);
 
   if (isEditing) {
     if (scheduleEditor) {
@@ -2212,7 +2378,9 @@ function WorkflowDisplayCell({
         onSubmitEdit?.();
       };
 
-      const handleInputKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+      const handleInputKeyDown = (
+        event: ReactKeyboardEvent<HTMLInputElement | HTMLSelectElement>
+      ) => {
         if (event.key === 'Enter') {
           event.preventDefault();
           onSubmitEdit?.();
@@ -2225,7 +2393,7 @@ function WorkflowDisplayCell({
       };
 
       return (
-        <div className="relative z-50">
+        <div ref={scheduleEditorRef} className="relative z-50">
           <div className="workflow-compact-cell rounded-md border border-sky-400 bg-white px-2 py-1 text-slate-900 shadow-sm ring-1 ring-sky-200">
             {formatWorkflowScheduleSummary(
               buildWorkflowScheduleValue({
@@ -2247,30 +2415,36 @@ function WorkflowDisplayCell({
               onKeyDown={handleInputKeyDown}
               className="workflow-edit-input min-w-0 rounded-md border border-sky-400 bg-white px-1 leading-none outline-none ring-1 ring-sky-200"
             />
-            <input
-              type="text"
-              inputMode="numeric"
-              maxLength={5}
-              placeholder="08:30"
+            <select
               value={scheduleDraft.time_from}
               onChange={(event) =>
                 updateScheduleDraft({ time_from: event.target.value || '' })
               }
               onKeyDown={handleInputKeyDown}
               className="workflow-edit-input min-w-0 rounded-md border border-sky-400 bg-white px-1 leading-none outline-none ring-1 ring-sky-200"
-            />
-            <input
-              type="text"
-              inputMode="numeric"
-              maxLength={5}
-              placeholder="16:30"
+            >
+              <option value="">From</option>
+              {WORKFLOW_TIME_SELECT_OPTIONS.map((option) => (
+                <option key={`schedule-from-${option.value}`} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <select
               value={scheduleDraft.time_to}
               onChange={(event) =>
                 updateScheduleDraft({ time_to: event.target.value || '' })
               }
               onKeyDown={handleInputKeyDown}
               className="workflow-edit-input min-w-0 rounded-md border border-sky-400 bg-white px-1 leading-none outline-none ring-1 ring-sky-200"
-            />
+            >
+              <option value="">To</option>
+              {WORKFLOW_TIME_SELECT_OPTIONS.map((option) => (
+                <option key={`schedule-to-${option.value}`} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
       );
@@ -2575,24 +2749,34 @@ function WorkflowInternationalRouteDetailsOverlay({
                   />
                 </div>
                 <div>
-                  <input
-                    type="text"
+                  <select
                     value={details.execution_time_from}
                     onChange={(event) => onChange({ execution_time_from: event.target.value })}
-                    placeholder="08:30"
                     disabled={controlsDisabled}
                     className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs disabled:cursor-not-allowed disabled:bg-slate-100"
-                  />
+                  >
+                    <option value="">From</option>
+                    {WORKFLOW_TIME_SELECT_OPTIONS.map((option) => (
+                      <option key={`intl-from-${option.value}`} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
-                  <input
-                    type="text"
+                  <select
                     value={details.execution_time_to}
                     onChange={(event) => onChange({ execution_time_to: event.target.value })}
-                    placeholder="16:30"
                     disabled={controlsDisabled}
                     className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs disabled:cursor-not-allowed disabled:bg-slate-100"
-                  />
+                  >
+                    <option value="">To</option>
+                    {WORKFLOW_TIME_SELECT_OPTIONS.map((option) => (
+                      <option key={`intl-to-${option.value}`} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <input
@@ -2879,6 +3063,12 @@ function WorkflowCollectionRouteEditorOverlay({
   const executionLabel = getWorkflowRouteExecutionDateLabel(editor.step_key);
   const priceLabel = `${stepLabel} price`;
   const notesLabel = 'Notes';
+  const canEditSetup = editor.can_edit_setup;
+  const canEditExecution = editor.can_edit_execution;
+  const canManageDocuments = editor.can_manage_documents;
+  const canSave = canEditSetup || (canEditExecution && !!editor.cargo_leg_id);
+  const setupControlsDisabled = !canEditSetup || saving || loading;
+  const executionControlsDisabled = !canEditExecution || saving || loading;
   const notesPlaceholder = isReloadingStep
     ? 'Arrival confirmed, dimensions checked, damaged, mismatch, or other reloading notes.'
     : 'Extra information for the manager responsible for this route step.';
@@ -2907,6 +3097,13 @@ function WorkflowCollectionRouteEditorOverlay({
           </div>
         </div>
         <div className="space-y-3 p-4">
+      {!canEditSetup ? (
+        <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-[11px] text-sky-900">
+          {canEditExecution
+            ? 'Route setup is locked for you. You can update only execution details and documents for your assigned step.'
+            : 'This route step is visible for you, but editing is locked.'}
+        </div>
+      ) : null}
       <div className="grid gap-3 md:grid-cols-2">
         <div>
           <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
@@ -2919,6 +3116,7 @@ function WorkflowCollectionRouteEditorOverlay({
                 mode: event.target.value as WorkflowCollectionEditorState['mode'],
               })
             }
+            disabled={setupControlsDisabled}
             className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
           >
             {modeOptions.map((option) => (
@@ -2934,11 +3132,11 @@ function WorkflowCollectionRouteEditorOverlay({
           </label>
           <select
             value={managerValue}
-            onChange={(event) => {
-              const nextValue = event.target.value;
-              if (nextValue === '__all__') {
-                onChange({
-                  show_to_all_managers: true,
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                if (nextValue === '__all__') {
+                  onChange({
+                    show_to_all_managers: true,
                   manager_user_ids: [],
                 });
                 return;
@@ -2949,6 +3147,7 @@ function WorkflowCollectionRouteEditorOverlay({
                 manager_user_ids: nextValue ? [nextValue] : [],
               });
             }}
+            disabled={setupControlsDisabled}
             className={`w-full rounded-md border bg-white px-2 py-1 text-xs ${
               errors.manager_user_ids ? 'border-red-400' : 'border-slate-300'
             }`}
@@ -2984,6 +3183,7 @@ function WorkflowCollectionRouteEditorOverlay({
                     show_to_all_managers: false,
                   })
                 }
+                disabled={setupControlsDisabled}
                 className={`w-full rounded-md border bg-white px-2 py-1 text-xs ${
                   errors.responsible_organization_id ? 'border-red-400' : 'border-slate-300'
                 }`}
@@ -3010,6 +3210,7 @@ function WorkflowCollectionRouteEditorOverlay({
                 onChange={(event) =>
                   onChange({ responsible_warehouse_id: event.target.value })
                 }
+                disabled={setupControlsDisabled}
                 className={`w-full rounded-md border bg-white px-2 py-1 text-xs ${
                   errors.responsible_warehouse_id ? 'border-red-400' : 'border-slate-300'
                 }`}
@@ -3031,7 +3232,7 @@ function WorkflowCollectionRouteEditorOverlay({
 
           <div>
             <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-              Trip number
+              Route number
             </label>
             <div className="flex gap-2">
               <input
@@ -3039,6 +3240,7 @@ function WorkflowCollectionRouteEditorOverlay({
                 onChange={(event) =>
                   onChange({ linked_trip_number: event.target.value.toUpperCase() })
                 }
+                disabled={setupControlsDisabled}
                 placeholder="TR-000000"
                 className={`min-w-0 flex-1 rounded-md border bg-white px-2 py-1 text-xs ${
                   errors.linked_trip_number ? 'border-red-400' : 'border-slate-300'
@@ -3047,7 +3249,7 @@ function WorkflowCollectionRouteEditorOverlay({
               <button
                 type="button"
                 onClick={onCreateTrip}
-                disabled={saving || loading}
+                disabled={setupControlsDisabled}
                 className="shrink-0 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Create trip
@@ -3060,7 +3262,7 @@ function WorkflowCollectionRouteEditorOverlay({
 
           <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
             {lookupLoading ? (
-              <span className="text-slate-500">Looking up trip...</span>
+              <span className="text-slate-500">Looking up route...</span>
             ) : matchedTrip ? (
               <div className="space-y-1">
                 <div className="font-medium text-slate-900">
@@ -3098,6 +3300,7 @@ function WorkflowCollectionRouteEditorOverlay({
                     <select
                       value={editor.step_status}
                       onChange={(event) => onChange({ step_status: event.target.value })}
+                      disabled={executionControlsDisabled}
                       className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
                     >
                       {WORKFLOW_ROUTE_STEP_STATUS_OPTIONS.map((option) => (
@@ -3123,34 +3326,43 @@ function WorkflowCollectionRouteEditorOverlay({
                       type="date"
                       value={editor.execution_date}
                       onChange={(event) => onChange({ execution_date: event.target.value })}
+                      disabled={executionControlsDisabled}
                       className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
                     />
                   </div>
                   <div>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      maxLength={5}
-                      placeholder="08:30"
+                    <select
                       value={editor.execution_time_from}
                       onChange={(event) =>
                         onChange({ execution_time_from: event.target.value })
                       }
+                      disabled={executionControlsDisabled}
                       className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-                    />
+                    >
+                      <option value="">From</option>
+                      {WORKFLOW_TIME_SELECT_OPTIONS.map((option) => (
+                        <option key={`${editor.step_key}-from-${option.value}`} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      maxLength={5}
-                      placeholder="16:30"
+                    <select
                       value={editor.execution_time_to}
                       onChange={(event) =>
                         onChange({ execution_time_to: event.target.value })
                       }
+                      disabled={executionControlsDisabled}
                       className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-                    />
+                    >
+                      <option value="">To</option>
+                      {WORKFLOW_TIME_SELECT_OPTIONS.map((option) => (
+                        <option key={`${editor.step_key}-to-${option.value}`} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div>
                     <input
@@ -3159,6 +3371,7 @@ function WorkflowCollectionRouteEditorOverlay({
                       placeholder="0.00"
                       value={editor.transport_price}
                       onChange={(event) => onChange({ transport_price: event.target.value })}
+                      disabled={executionControlsDisabled}
                       className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
                     />
                   </div>
@@ -3178,6 +3391,7 @@ function WorkflowCollectionRouteEditorOverlay({
                         onChange={(event) =>
                           onChange({ truck_plate: event.target.value.toUpperCase() })
                         }
+                        disabled={executionControlsDisabled}
                         className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
                       />
                     </div>
@@ -3192,6 +3406,7 @@ function WorkflowCollectionRouteEditorOverlay({
                         onChange={(event) =>
                           onChange({ trailer_plate: event.target.value.toUpperCase() })
                         }
+                        disabled={executionControlsDisabled}
                         className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
                       />
                     </div>
@@ -3204,6 +3419,7 @@ function WorkflowCollectionRouteEditorOverlay({
                         type="text"
                         value={editor.driver_name}
                         onChange={(event) => onChange({ driver_name: event.target.value })}
+                        disabled={executionControlsDisabled}
                         className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
                       />
                     </div>
@@ -3216,6 +3432,7 @@ function WorkflowCollectionRouteEditorOverlay({
                         type="text"
                         value={editor.driver_phone}
                         onChange={(event) => onChange({ driver_phone: event.target.value })}
+                        disabled={executionControlsDisabled}
                         className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
                       />
                     </div>
@@ -3230,6 +3447,7 @@ function WorkflowCollectionRouteEditorOverlay({
                       onChange={(event) =>
                         onChange({ arrival_confirmed: event.target.checked })
                       }
+                      disabled={executionControlsDisabled}
                     />
                     <span>Arrival confirmed</span>
                   </label>
@@ -3240,6 +3458,7 @@ function WorkflowCollectionRouteEditorOverlay({
                       onChange={(event) =>
                         onChange({ dimensions_checked: event.target.checked })
                       }
+                      disabled={executionControlsDisabled}
                     />
                     <span>Dimensions checked</span>
                   </label>
@@ -3250,6 +3469,7 @@ function WorkflowCollectionRouteEditorOverlay({
                       onChange={(event) =>
                         onChange({ cargo_matches: event.target.checked })
                       }
+                      disabled={executionControlsDisabled}
                     />
                     <span>Everything matches</span>
                   </label>
@@ -3260,6 +3480,7 @@ function WorkflowCollectionRouteEditorOverlay({
                       onChange={(event) =>
                         onChange({ damaged_reported: event.target.checked })
                       }
+                      disabled={executionControlsDisabled}
                     />
                     <span>Damaged</span>
                   </label>
@@ -3274,6 +3495,7 @@ function WorkflowCollectionRouteEditorOverlay({
                   rows={2}
                   value={editor.manager_notes}
                   onChange={(event) => onChange({ manager_notes: event.target.value })}
+                  disabled={executionControlsDisabled}
                   placeholder={notesPlaceholder}
                   className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
                 />
@@ -3332,7 +3554,7 @@ function WorkflowCollectionRouteEditorOverlay({
                         {CARGO_LEG_DOCUMENT_ZONE_DESCRIPTIONS[zone]}
                       </div>
                     </div>
-                    <label className="shrink-0 cursor-pointer rounded-md border border-slate-300 bg-white px-2 py-1 text-[10px] font-medium text-slate-700 hover:bg-slate-50">
+                    <label className={`shrink-0 rounded-md border border-slate-300 bg-white px-2 py-1 text-[10px] font-medium text-slate-700 ${canManageDocuments ? 'cursor-pointer hover:bg-slate-50' : 'cursor-not-allowed opacity-60'}`}>
                       Add file
                       <input
                         type="file"
@@ -3343,7 +3565,7 @@ function WorkflowCollectionRouteEditorOverlay({
                           onUploadDocument(zone, event.currentTarget.files);
                           event.currentTarget.value = '';
                         }}
-                        disabled={documentsUploading || saving || loading}
+                        disabled={!canManageDocuments || documentsUploading || saving || loading}
                       />
                     </label>
                   </div>
@@ -3385,7 +3607,7 @@ function WorkflowCollectionRouteEditorOverlay({
                                   Open
                                 </button>
                               ) : null}
-                              {document.can_manage ? (
+                              {canManageDocuments && document.can_manage ? (
                                 <button
                                   type="button"
                                   onClick={() => onDeleteDocument(document.id)}
@@ -3420,7 +3642,7 @@ function WorkflowCollectionRouteEditorOverlay({
         <button
           type="button"
           onClick={onSave}
-          disabled={saving || loading}
+          disabled={!canSave || saving || loading}
           className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
         >
           {saving ? 'Saving...' : 'Save'}
@@ -3434,6 +3656,7 @@ function WorkflowCollectionRouteEditorOverlay({
 
 function WorkflowStandaloneRowView({
   row,
+  currentOrganizationId,
   columnOrder,
   customColumns,
   onOpenOrder,
@@ -3466,6 +3689,7 @@ function WorkflowStandaloneRowView({
   onResetRowHeight,
 }: {
   row: WorkflowStandaloneRow;
+  currentOrganizationId: string;
   columnOrder: WorkflowColumnOrder;
   customColumns: WorkflowCustomColumn[];
   onOpenOrder: (orderId: string) => void;
@@ -3548,9 +3772,15 @@ function WorkflowStandaloneRowView({
   const matchesEditingCell = (cell: WorkflowEditingCell | null) =>
     isSameEditingCell(cell, editingCell);
 
+  const isRouteOnlyRow = isRouteOnlyWorkflowRow(row);
+  const isCollectionRouteOnlyRow = isCollectionRouteOnlyWorkflowRow(
+    row,
+    currentOrganizationId
+  );
   const canEditTripOwnedField =
     allowAcknowledge && !!row.trip_editable_by_current_user && !!row.trip_id;
-  const canEditOrderField = allowAcknowledge && !!row.order_id;
+  const canEditOrderField =
+    allowAcknowledge && !!row.order_id && !isRouteOnlyRow;
   const canEditTripField = allowAcknowledge && row.row_type === 'trip_row' && !!row.trip_id;
   const prepCell = row.order_id ? orderFieldCell('prep') : null;
   const deliveryCell = row.order_id ? orderFieldCell('delivery') : null;
@@ -3558,8 +3788,9 @@ function WorkflowStandaloneRowView({
   const tripDeliveryCell = canEditTripField ? tripFieldCell('delivery') : null;
   const effectivePrepCell = prepCell ?? tripPrepCell;
   const effectiveDeliveryCell = deliveryCell ?? tripDeliveryCell;
-  const canEditPrep = allowAcknowledge && !!effectivePrepCell;
-  const canEditDelivery = allowAcknowledge && !!effectiveDeliveryCell;
+  const canEditPrep = allowAcknowledge && !!effectivePrepCell && !isRouteOnlyRow;
+  const canEditDelivery =
+    allowAcknowledge && !!effectiveDeliveryCell && !isRouteOnlyRow;
   const collectionPlanCell = buildRoutePlanEditingCell(
     row.id,
     row.order_id,
@@ -3582,7 +3813,7 @@ function WorkflowStandaloneRowView({
   );
   const statusCell =
     row.row_type === 'trip_row' ? tripFieldCell('status') : orderFieldCell('status');
-  const canEditStatus = allowAcknowledge && !!statusCell;
+  const canEditStatus = allowAcknowledge && !!statusCell && !isRouteOnlyRow;
   const isCollectionEditorOpen = (stepKey: WorkflowRouteEditorStepKey) =>
     collectionRouteEditor?.row_id === row.id && collectionRouteEditor?.step_key === stepKey;
 
@@ -3674,28 +3905,39 @@ function WorkflowStandaloneRowView({
     ),
     record_number: (
       <td className="px-2 py-1.5 whitespace-nowrap font-medium text-slate-900">
-        <button
-          type="button"
-          onClick={() => {
-            if (row.row_type === 'trip_row' && row.open_trip_id) {
-              onOpenTrip(row.open_trip_id);
-              return;
+        {isRouteOnlyRow && row.row_type === 'order_row' ? (
+          <CompactCell
+            value={
+              isCollectionRouteOnlyRow
+                ? row.route_steps?.collection?.linked_trip_number || row.record_number || '-'
+                : row.record_number || '-'
             }
+            scrollable
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              if (row.row_type === 'trip_row' && row.open_trip_id) {
+                onOpenTrip(row.open_trip_id);
+                return;
+              }
 
-            if (row.open_order_id) {
-              onOpenOrder(row.open_order_id);
-              return;
-            }
+              if (row.open_order_id) {
+                onOpenOrder(row.open_order_id);
+                return;
+              }
 
-            if (row.open_trip_id) {
-              onOpenTrip(row.open_trip_id);
-            }
-          }}
-          className="block w-full text-left"
-          title={buildRecordNumberDisplay(row)}
-        >
-          <CompactCell value={buildRecordNumberDisplay(row)} scrollable />
-        </button>
+              if (row.open_trip_id) {
+                onOpenTrip(row.open_trip_id);
+              }
+            }}
+            className="block w-full text-left"
+            title={buildRecordNumberDisplay(row)}
+          >
+            <CompactCell value={buildRecordNumberDisplay(row)} scrollable />
+          </button>
+        )}
       </td>
     ),
     kind: (
@@ -3715,17 +3957,26 @@ function WorkflowStandaloneRowView({
     ),
     reloading_plan: (
       <td className="px-2 py-1.5 whitespace-nowrap">
-        <WorkflowCollectionRouteEditor
-          value={formatWorkflowRouteStepSummary(row, 'reloading_before')}
-          editor={isCollectionEditorOpen('reloading_before') ? collectionRouteEditor : null}
-          active={isCollectionEditorOpen('reloading_before')}
-          onOpen={() => onOpenCollectionRouteEditor(row, 'reloading_before')}
-        />
+        {isCollectionRouteOnlyRow ? (
+          <CompactCell
+            value={formatWorkflowRouteStepSummary(row, 'reloading_before')}
+            scrollable
+          />
+        ) : (
+          <WorkflowCollectionRouteEditor
+            value={formatWorkflowRouteStepSummary(row, 'reloading_before')}
+            editor={isCollectionEditorOpen('reloading_before') ? collectionRouteEditor : null}
+            active={isCollectionEditorOpen('reloading_before')}
+            onOpen={() => onOpenCollectionRouteEditor(row, 'reloading_before')}
+          />
+        )}
       </td>
     ),
     international_plan: (
       <td className="px-2 py-1.5 whitespace-nowrap">
-        {row.route_plan?.international_trip_id ? (
+        {isCollectionRouteOnlyRow ? (
+          <CompactCell value="-" scrollable />
+        ) : row.route_plan?.international_trip_id ? (
           <button
             type="button"
             onClick={() =>
@@ -3745,22 +3996,30 @@ function WorkflowStandaloneRowView({
     ),
     distribution_plan: (
       <td className="px-2 py-1.5 whitespace-nowrap">
-        <WorkflowCollectionRouteEditor
-          value={formatWorkflowRouteStepSummary(row, 'distribution')}
-          editor={isCollectionEditorOpen('distribution') ? collectionRouteEditor : null}
-          active={isCollectionEditorOpen('distribution')}
-          onOpen={() => onOpenCollectionRouteEditor(row, 'distribution')}
-        />
+        {isCollectionRouteOnlyRow ? (
+          <CompactCell value="-" scrollable />
+        ) : (
+          <WorkflowCollectionRouteEditor
+            value={formatWorkflowRouteStepSummary(row, 'distribution')}
+            editor={isCollectionEditorOpen('distribution') ? collectionRouteEditor : null}
+            active={isCollectionEditorOpen('distribution')}
+            onOpen={() => onOpenCollectionRouteEditor(row, 'distribution')}
+          />
+        )}
       </td>
     ),
     reloading_after_international_plan: (
       <td className="px-2 py-1.5 whitespace-nowrap">
-        <WorkflowCollectionRouteEditor
-          value={formatWorkflowRouteStepSummary(row, 'reloading_after')}
-          editor={isCollectionEditorOpen('reloading_after') ? collectionRouteEditor : null}
-          active={isCollectionEditorOpen('reloading_after')}
-          onOpen={() => onOpenCollectionRouteEditor(row, 'reloading_after')}
-        />
+        {isCollectionRouteOnlyRow ? (
+          <CompactCell value="-" scrollable />
+        ) : (
+          <WorkflowCollectionRouteEditor
+            value={formatWorkflowRouteStepSummary(row, 'reloading_after')}
+            editor={isCollectionEditorOpen('reloading_after') ? collectionRouteEditor : null}
+            active={isCollectionEditorOpen('reloading_after')}
+            onOpen={() => onOpenCollectionRouteEditor(row, 'reloading_after')}
+          />
+        )}
       </td>
     ),
     company: (
@@ -3774,7 +4033,9 @@ function WorkflowStandaloneRowView({
     contact: (
       <td className="px-2 py-1.5">
         {(() => {
-          const cell = orderFieldCell('contact') ?? (canEditTripField ? tripFieldCell('contact') : null);
+          const cell =
+            (canEditOrderField ? orderFieldCell('contact') : null) ??
+            (canEditTripField ? tripFieldCell('contact') : null);
           return (
         <WorkflowDisplayCell
           value={row.contact_display}
@@ -3887,6 +4148,9 @@ function WorkflowStandaloneRowView({
     ),
     unloading: (
       <td className="px-2 py-1.5">
+        {isCollectionRouteOnlyRow ? (
+          <CompactCell value="-" scrollable />
+        ) : (
         <WorkflowDisplayCell
           value={buildLocationCell(row.unloading_display, row.unloading_extra)}
           scrollable
@@ -3908,10 +4172,14 @@ function WorkflowStandaloneRowView({
           onSubmitEdit={onSubmitEdit}
           onCancelEdit={onCancelEdit}
         />
+        )}
       </td>
     ),
     unloading_customs: (
       <td className="px-2 py-1.5">
+        {isCollectionRouteOnlyRow ? (
+          <CompactCell value="-" scrollable />
+        ) : (
         <WorkflowDisplayCell
           value={row.unloading_customs_display}
           scrollable
@@ -3933,6 +4201,7 @@ function WorkflowStandaloneRowView({
           onSubmitEdit={onSubmitEdit}
           onCancelEdit={onCancelEdit}
         />
+        )}
       </td>
     ),
     cargo: (
@@ -4006,6 +4275,9 @@ function WorkflowStandaloneRowView({
     ),
     revenue: (
       <td className="px-2 py-1.5 whitespace-nowrap">
+        {isRouteOnlyRow ? (
+          <CompactCell value="-" />
+        ) : (
         <WorkflowDisplayCell
           value={formatMoneyCell(row.revenue_display)}
           state={row.field_states.revenue}
@@ -4026,10 +4298,16 @@ function WorkflowStandaloneRowView({
           onSubmitEdit={onSubmitEdit}
           onCancelEdit={onCancelEdit}
         />
+        )}
       </td>
     ),
     cost: (
       <td className="px-2 py-1.5 whitespace-nowrap">
+        {isCollectionRouteOnlyRow ? (
+          <CompactCell value={formatMoneyCell(row.cost_display)} />
+        ) : isRouteOnlyRow ? (
+          <CompactCell value="-" />
+        ) : (
         <WorkflowDisplayCell
           value={formatMoneyCell(row.cost_display)}
           state={row.field_states.cost}
@@ -4050,10 +4328,14 @@ function WorkflowStandaloneRowView({
           onSubmitEdit={onSubmitEdit}
           onCancelEdit={onCancelEdit}
         />
+        )}
       </td>
     ),
     profit: (
       <td className="px-2 py-1.5 whitespace-nowrap">
+        {isRouteOnlyRow ? (
+          <CompactCell value="-" />
+        ) : (
         <WorkflowDisplayCell
           value={formatMoneyCell(row.profit_display)}
           state={row.field_states.profit}
@@ -4083,16 +4365,24 @@ function WorkflowStandaloneRowView({
           onSubmitEdit={onSubmitEdit}
           onCancelEdit={onCancelEdit}
         />
+        )}
       </td>
     ),
     trip_vehicle: (
       <td className="px-2 py-1.5">
+        {(() => {
+          const vehicleDisplay = isCollectionRouteOnlyRow
+            ? row.route_steps?.collection?.linked_trip_vehicle || '-'
+            : row.vehicle_display;
+          const combinedValue = isRouteOnlyRow
+            ? vehicleDisplay
+            : [row.trip_display, row.trip_status ? formatStatusLabel(row.trip_status) : '', vehicleDisplay]
+                .filter((value) => value && value !== '-')
+                .join(' / ') || '-';
+
+          return (
         <WorkflowDisplayCell
-          value={
-            [row.trip_display, row.trip_status ? formatStatusLabel(row.trip_status) : '', row.vehicle_display]
-              .filter((value) => value && value !== '-')
-              .join(' / ') || '-'
-          }
+          value={combinedValue}
           scrollable
           state={row.field_states.trip_vehicle}
           onAcknowledge={acknowledge(row.field_states.trip_vehicle)}
@@ -4102,9 +4392,7 @@ function WorkflowStandaloneRowView({
               ? () =>
                   onStartEdit(
                     tripFieldCell('trip_vehicle')!,
-                    [row.trip_display, row.trip_status ? formatStatusLabel(row.trip_status) : '', row.vehicle_display]
-                      .filter((value) => value && value !== '-')
-                      .join(' / ') || '-'
+                    combinedValue
                   )
               : null
           }
@@ -4114,6 +4402,8 @@ function WorkflowStandaloneRowView({
           onSubmitEdit={onSubmitEdit}
           onCancelEdit={onCancelEdit}
         />
+          );
+        })()}
       </td>
     ),
   };
@@ -4142,8 +4432,10 @@ function WorkflowStandaloneRowView({
 
 function GroupageBlock({
   group,
+  currentOrganizationId,
   columnOrder,
   customColumns,
+  collectionOperationalView = false,
   headerScope,
   onOpenOrder,
   onOpenTrip,
@@ -4190,8 +4482,10 @@ function GroupageBlock({
   onCancelCollectionRouteEditor,
 }: {
   group: WorkflowGroup;
+  currentOrganizationId: string;
   columnOrder: WorkflowColumnOrder;
   customColumns: WorkflowCustomColumn[];
+  collectionOperationalView?: boolean;
   headerScope: string;
   onOpenOrder: (orderId: string) => void;
   onOpenTrip: (tripId: string) => void;
@@ -4598,6 +4892,7 @@ function GroupageBlock({
           filters={filters}
           columnOrder={columnOrder}
           customColumns={customColumns}
+          collectionOperationalView={collectionOperationalView}
           headerScope={headerScope}
           activeHeaderFilter={activeHeaderFilter}
           activeHeaderScope={activeHeaderScope}
@@ -4628,6 +4923,7 @@ function GroupageBlock({
             <WorkflowStandaloneRowView
               key={row.id}
               row={row}
+              currentOrganizationId={currentOrganizationId}
               columnOrder={columnOrder}
               customColumns={customColumns}
               onOpenOrder={onOpenOrder}
@@ -4684,6 +4980,7 @@ export default function WorkflowPage() {
   const [effectiveManagerUserId, setEffectiveManagerUserId] = useState('');
   const [viewerIsElevated, setViewerIsElevated] = useState(false);
   const [currentOrganizationId, setCurrentOrganizationId] = useState('');
+  const [effectiveOrganizationId, setEffectiveOrganizationId] = useState('');
   const [groupageGroups, setGroupageGroups] = useState<WorkflowGroup[]>([]);
   const [standaloneRows, setStandaloneRows] = useState<WorkflowStandaloneRow[]>([]);
   const [customColumns, setCustomColumns] = useState<WorkflowCustomColumn[]>([]);
@@ -5271,6 +5568,7 @@ export default function WorkflowPage() {
       setEffectiveManagerUserId(data.effective_manager_user_id || '');
       setViewerIsElevated(!!data.viewer_is_elevated);
       setCurrentOrganizationId(data.current_organization_id || '');
+      setEffectiveOrganizationId(data.effective_organization_id || '');
       setGroupageGroups(data.groupage_groups || []);
       setStandaloneRows(data.standalone_rows || []);
       void fetchCustomColumns();
@@ -5343,15 +5641,6 @@ export default function WorkflowPage() {
     !!viewerUserId &&
     !!effectiveManagerUserId &&
     viewerUserId === effectiveManagerUserId;
-
-  const workflowTableMinWidth = useMemo(
-    () =>
-      columnOrder.reduce(
-        (sum, columnId) => sum + (columnWidths[columnId] ?? getDefaultWorkflowColumnWidth(columnId)),
-        0
-      ),
-    [columnOrder, columnWidths]
-  );
 
   const startColumnResize = (columnId: WorkflowColumnId, clientX: number) => {
     setActiveHeaderFilter(null);
@@ -5617,7 +5906,10 @@ export default function WorkflowPage() {
     documentZone: CargoLegDocumentZone,
     files: FileList | null
   ) => {
-    if (!collectionRouteEditor?.cargo_leg_id) {
+    if (
+      !collectionRouteEditor?.cargo_leg_id ||
+      !collectionRouteEditor.can_manage_documents
+    ) {
       return;
     }
 
@@ -5672,7 +5964,10 @@ export default function WorkflowPage() {
   };
 
   const deleteCollectionRouteDocument = async (documentId: string) => {
-    if (!collectionRouteEditor?.cargo_leg_id) {
+    if (
+      !collectionRouteEditor?.cargo_leg_id ||
+      !collectionRouteEditor.can_manage_documents
+    ) {
       return;
     }
 
@@ -5957,24 +6252,36 @@ export default function WorkflowPage() {
           activeLinkedTrip.cargo_legs || [],
           stepKey
         );
-        const stepDisplay = getWorkflowRouteStepDisplay(row, stepKey);
-        const storedMode = getWorkflowRouteEditorModeValue(row.route_plan, stepKey);
-        const matchedTrip = stepCargoLeg?.linked_trip || null;
-        const initialMode =
-          stepCargoLeg || storedMode === getWorkflowRouteEditorRouteMode(stepKey)
-            ? getWorkflowRouteEditorRouteMode(stepKey)
-            : storedMode;
-        const executionState = buildWorkflowExecutionEditorState(stepCargoLeg, matchedTrip);
+      const stepDisplay = getWorkflowRouteStepDisplay(row, stepKey);
+      const storedMode = getWorkflowRouteEditorModeValue(row.route_plan, stepKey);
+      const matchedTrip = stepCargoLeg?.linked_trip || null;
+      const initialMode =
+        stepCargoLeg || storedMode === getWorkflowRouteEditorRouteMode(stepKey)
+          ? getWorkflowRouteEditorRouteMode(stepKey)
+          : storedMode;
+      const executionState = buildWorkflowExecutionEditorState(stepCargoLeg, matchedTrip);
+      const canEditSetup = canEditWorkflowRouteSetup({
+        viewerIsElevated,
+        currentOrganizationId,
+        effectiveOrganizationId,
+      });
+      const canEditExecution = canEditWorkflowRouteExecution({
+        viewerIsElevated,
+        currentOrganizationId,
+        effectiveOrganizationId,
+        viewerUserId,
+        cargoLeg: stepCargoLeg,
+      });
 
       setCollectionRouteEditor({
-          row_id: row.id,
-          order_id: row.order_id,
-          trip_id: row.trip_id,
-          order_trip_link_id: activeLinkedTrip.link_id,
-          cargo_leg_id: stepCargoLeg?.id ?? stepDisplay?.cargo_leg_id ?? null,
-          existing_cargo_legs: activeLinkedTrip.cargo_legs || [],
-          step_key: stepKey,
-          mode: initialMode,
+        row_id: row.id,
+        order_id: row.order_id,
+        trip_id: row.trip_id,
+        order_trip_link_id: activeLinkedTrip.link_id,
+        cargo_leg_id: stepCargoLeg?.id ?? stepDisplay?.cargo_leg_id ?? null,
+        existing_cargo_legs: activeLinkedTrip.cargo_legs || [],
+        step_key: stepKey,
+        mode: initialMode,
         responsible_organization_id:
           stepCargoLeg?.responsible_organization_id ||
           stepCargoLeg?.linked_trip?.organization_id ||
@@ -5988,6 +6295,9 @@ export default function WorkflowPage() {
           stepCargoLeg?.linked_trip?.trip_number ||
           (initialMode === getWorkflowRouteEditorRouteMode(stepKey) ? '' : ''),
         ...executionState,
+        can_edit_setup: canEditSetup,
+        can_edit_execution: canEditExecution,
+        can_manage_documents: canEditExecution,
       });
       setCollectionRouteEditorMatchedTrip(matchedTrip);
       setCollectionRouteEditorErrors({});
@@ -6020,7 +6330,7 @@ export default function WorkflowPage() {
     }
 
     if (!collectionRouteEditorMatchedTrip?.id) {
-      nextErrors.linked_trip_number = 'Choose existing collection trip or create a new one';
+      nextErrors.linked_trip_number = `Choose existing ${getWorkflowRouteEditorLabel(editor.step_key).toLowerCase()} route or create a new one`;
     }
 
     setCollectionRouteEditorErrors(nextErrors);
@@ -6176,6 +6486,47 @@ export default function WorkflowPage() {
       return;
     }
 
+    if (
+      !collectionRouteEditor.can_edit_setup &&
+      !collectionRouteEditor.can_edit_execution
+    ) {
+      toast.error('You can view this route step, but you cannot edit it.');
+      return;
+    }
+
+    if (!collectionRouteEditor.can_edit_setup) {
+      if (!collectionRouteEditor.cargo_leg_id || !collectionRouteEditor.can_edit_execution) {
+        toast.error('Route setup is locked for you.');
+        return;
+      }
+
+      try {
+        setCollectionRouteEditorSaving(true);
+        await saveCollectionRouteExecutionDetails(
+          collectionRouteEditor.cargo_leg_id,
+          collectionRouteEditor
+        );
+        toast.success(
+          `${getWorkflowRouteEditorLabel(collectionRouteEditor.step_key)} execution details saved`
+        );
+        resetCollectionRouteEditor();
+        void fetchWorkflow(
+          buildReloadParams().organizationId,
+          buildReloadParams().managerUserId
+        );
+      } catch (error) {
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : 'Failed to save route execution details'
+        );
+      } finally {
+        setCollectionRouteEditorSaving(false);
+      }
+
+      return;
+    }
+
     if (!validateCollectionRouteEditor(collectionRouteEditor)) {
       return;
     }
@@ -6272,7 +6623,7 @@ export default function WorkflowPage() {
       }
 
       if (!resolvedLinkedTrip?.id) {
-        toast.error(`Choose existing ${getWorkflowRouteEditorLabel(editor.step_key).toLowerCase()} trip or create a new one`);
+        toast.error(`Choose existing ${getWorkflowRouteEditorLabel(editor.step_key).toLowerCase()} route or create a new one`);
         return;
       }
 
@@ -6450,6 +6801,11 @@ export default function WorkflowPage() {
 
   const createCollectionRouteTrip = async () => {
     if (!collectionRouteEditor || collectionRouteEditorSaving) {
+      return;
+    }
+
+    if (!collectionRouteEditor.can_edit_setup) {
+      toast.error('Only the order or groupage side can change route setup.');
       return;
     }
 
@@ -7167,6 +7523,40 @@ export default function WorkflowPage() {
     return { groups, rows };
   }, [filters, groupageGroups, standaloneRows]);
 
+  const collectionOperationalView = useMemo(() => {
+    if (viewerIsElevated || !currentOrganizationId) {
+      return false;
+    }
+
+    if (filteredData.groups.length > 0 || filteredData.rows.length === 0) {
+      return false;
+    }
+
+    return filteredData.rows.every((row) =>
+      isCollectionRouteOnlyWorkflowRow(row, currentOrganizationId)
+    );
+  }, [currentOrganizationId, filteredData.groups.length, filteredData.rows, viewerIsElevated]);
+
+  const visibleColumnOrder = useMemo(
+    () =>
+      collectionOperationalView
+        ? columnOrder.filter((columnId) =>
+            COLLECTION_OPERATIONAL_VISIBLE_COLUMNS.has(columnId)
+          )
+        : columnOrder,
+    [collectionOperationalView, columnOrder]
+  );
+
+  const workflowTableMinWidth = useMemo(
+    () =>
+      visibleColumnOrder.reduce(
+        (sum, columnId) =>
+          sum + (columnWidths[columnId] ?? getDefaultWorkflowColumnWidth(columnId)),
+        0
+      ),
+    [visibleColumnOrder, columnWidths]
+  );
+
   const updateFilter = <K extends keyof WorkflowFilters>(
     key: K,
     value: WorkflowFilters[K]
@@ -7434,8 +7824,10 @@ export default function WorkflowPage() {
               <GroupageBlock
                 key={group.id}
                 group={group}
-                columnOrder={columnOrder}
+                currentOrganizationId={currentOrganizationId}
+                columnOrder={visibleColumnOrder}
                 customColumns={customColumns}
+                collectionOperationalView={collectionOperationalView}
                 headerScope={`group-${group.id}`}
                 onOpenOrder={(orderId) => router.push(`/app/orders/${orderId}`)}
                 onOpenTrip={(tripId) => router.push(`/app/trips/${tripId}`)}
@@ -7489,11 +7881,12 @@ export default function WorkflowPage() {
                   className="w-full table-fixed text-[11px] leading-tight"
                   style={{ minWidth: `${workflowTableMinWidth}px` }}
                 >
-                  <WorkflowColGroup columnWidths={columnWidths} columnOrder={columnOrder} />
+                  <WorkflowColGroup columnWidths={columnWidths} columnOrder={visibleColumnOrder} />
                   <WorkflowTableHeader
                     filters={filters}
-                    columnOrder={columnOrder}
+                    columnOrder={visibleColumnOrder}
                     customColumns={customColumns}
+                    collectionOperationalView={collectionOperationalView}
                     headerScope="standalone"
                     activeHeaderFilter={activeHeaderFilter}
                     activeHeaderScope={activeHeaderScope}
@@ -7513,7 +7906,8 @@ export default function WorkflowPage() {
                       <WorkflowStandaloneRowView
                         key={row.id}
                         row={row}
-                        columnOrder={columnOrder}
+                        currentOrganizationId={currentOrganizationId}
+                        columnOrder={visibleColumnOrder}
                         customColumns={customColumns}
                         onOpenOrder={(orderId) => router.push(`/app/orders/${orderId}`)}
                         onOpenTrip={(tripId) => router.push(`/app/trips/${tripId}`)}

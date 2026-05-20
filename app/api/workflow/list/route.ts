@@ -440,11 +440,15 @@ async function loadCargoLegTypesByOrderTripLinkId(
       id: string;
       leg_order: number | null;
       leg_type: string;
+      responsible_organization_id: string | null;
       responsible_organization_name: string | null;
       responsible_warehouse_name: string | null;
       linked_trip_number: string | null;
       linked_trip_carrier_name: string | null;
       linked_trip_manager_name: string | null;
+      linked_trip_vehicle: string | null;
+      linked_trip_price: number | null;
+      execution_transport_price: number | null;
     }>
   >();
 
@@ -460,6 +464,7 @@ async function loadCargoLegTypesByOrderTripLinkId(
       order_trip_link_id,
       leg_order,
       leg_type,
+      responsible_organization_id,
       responsible_organization:responsible_organization_id (
         name
       ),
@@ -468,6 +473,10 @@ async function loadCargoLegTypesByOrderTripLinkId(
       ),
       linked_trip:linked_trip_id (
         trip_number,
+        price,
+        driver_name,
+        truck_plate,
+        trailer_plate,
         carrier:carrier_company_id (
           name
         ),
@@ -475,6 +484,9 @@ async function loadCargoLegTypesByOrderTripLinkId(
           first_name,
           last_name
         )
+      ),
+      execution_detail:cargo_leg_execution_details (
+        transport_price
       )
     `
     )
@@ -510,6 +522,9 @@ async function loadCargoLegTypesByOrderTripLinkId(
     const linkedTripCreatedByUser = Array.isArray(linkedTrip?.created_by_user)
       ? linkedTrip?.created_by_user?.[0] ?? null
       : linkedTrip?.created_by_user;
+    const executionDetail = Array.isArray((row as any).execution_detail)
+      ? (row as any).execution_detail[0] ?? null
+      : (row as any).execution_detail;
     current.push({
       id: (row as any).id as string,
       leg_order:
@@ -517,6 +532,10 @@ async function loadCargoLegTypesByOrderTripLinkId(
           ? ((row as any).leg_order as number)
           : null,
       leg_type: (row as any).leg_type as string,
+      responsible_organization_id:
+        typeof (row as any).responsible_organization_id === 'string'
+          ? ((row as any).responsible_organization_id as string)
+          : null,
       responsible_organization_name:
         typeof responsibleOrganization?.name === 'string' ? responsibleOrganization.name : null,
       responsible_warehouse_name:
@@ -528,6 +547,20 @@ async function loadCargoLegTypesByOrderTripLinkId(
       linked_trip_manager_name:
         typeof linkedTripCreatedByUser === 'object' && linkedTripCreatedByUser
           ? `${linkedTripCreatedByUser.first_name || ''} ${linkedTripCreatedByUser.last_name || ''}`.trim() || null
+          : null,
+      linked_trip_vehicle:
+        [linkedTrip?.driver_name, linkedTrip?.truck_plate, linkedTrip?.trailer_plate]
+          .map((value) => (typeof value === 'string' ? value.trim() : ''))
+          .filter((value) => value !== '')
+          .join(' / ') || null,
+      linked_trip_price:
+        typeof linkedTrip?.price === 'number' && Number.isFinite(linkedTrip.price)
+          ? linkedTrip.price
+          : null,
+      execution_transport_price:
+        typeof executionDetail?.transport_price === 'number' &&
+        Number.isFinite(executionDetail.transport_price)
+          ? executionDetail.transport_price
           : null,
     });
     cargoLegsByOrderTripLinkId.set(key, current);
@@ -554,6 +587,15 @@ function buildRouteStepSummary(step: {
       .join(' / ') || '-';
   }
 
+  if (step.leg_type === 'collection') {
+    const carrierName =
+      typeof step.linked_trip_carrier_name === 'string'
+        ? step.linked_trip_carrier_name.trim()
+        : '';
+
+    return carrierName || '-';
+  }
+
   const location = step.responsible_warehouse_name || step.responsible_organization_name || '-';
   const trip = step.linked_trip_number || '-';
   return `${location} / ${trip}`;
@@ -564,11 +606,15 @@ function buildWorkflowRouteStepDisplayMap(
     id: string;
     leg_order: number | null;
     leg_type: string;
+    responsible_organization_id: string | null;
     responsible_organization_name: string | null;
     responsible_warehouse_name: string | null;
     linked_trip_number: string | null;
     linked_trip_carrier_name: string | null;
     linked_trip_manager_name: string | null;
+    linked_trip_vehicle: string | null;
+    linked_trip_price: number | null;
+    execution_transport_price: number | null;
   }>
 ) {
   const sortedLegs = [...cargoLegs].sort(
@@ -604,23 +650,31 @@ function buildWorkflowRouteStepDisplayMap(
 
   const createDisplay = (
     cargoLeg:
-      | {
-          id: string;
-          responsible_organization_name: string | null;
-          responsible_warehouse_name: string | null;
-          linked_trip_number: string | null;
-          leg_type: string;
-          linked_trip_carrier_name: string | null;
-          linked_trip_manager_name: string | null;
-        }
+        | {
+            id: string;
+            responsible_organization_id: string | null;
+            responsible_organization_name: string | null;
+            responsible_warehouse_name: string | null;
+            linked_trip_number: string | null;
+            leg_type: string;
+            linked_trip_carrier_name: string | null;
+            linked_trip_manager_name: string | null;
+            linked_trip_vehicle: string | null;
+            linked_trip_price: number | null;
+            execution_transport_price: number | null;
+          }
       | null
   ) =>
     cargoLeg
       ? {
           cargo_leg_id: cargoLeg.id,
+          responsible_organization_id: cargoLeg.responsible_organization_id,
           organization_name: cargoLeg.responsible_organization_name,
           warehouse_name: cargoLeg.responsible_warehouse_name,
           linked_trip_number: cargoLeg.linked_trip_number,
+          linked_trip_vehicle: cargoLeg.linked_trip_vehicle,
+          linked_trip_price: cargoLeg.linked_trip_price,
+          execution_transport_price: cargoLeg.execution_transport_price,
           summary: buildRouteStepSummary(cargoLeg),
         }
       : null;
@@ -654,37 +708,57 @@ function buildOrderRow(params: {
   routeSteps?: {
     collection: {
       cargo_leg_id: string;
+      responsible_organization_id: string | null;
       organization_name: string | null;
       warehouse_name: string | null;
       linked_trip_number: string | null;
+      linked_trip_vehicle: string | null;
+      linked_trip_price: number | null;
+      execution_transport_price: number | null;
       summary: string;
     } | null;
     reloading_before: {
       cargo_leg_id: string;
+      responsible_organization_id: string | null;
       organization_name: string | null;
       warehouse_name: string | null;
       linked_trip_number: string | null;
+      linked_trip_vehicle: string | null;
+      linked_trip_price: number | null;
+      execution_transport_price: number | null;
       summary: string;
     } | null;
     international: {
       cargo_leg_id: string;
+      responsible_organization_id: string | null;
       organization_name: string | null;
       warehouse_name: string | null;
       linked_trip_number: string | null;
+      linked_trip_vehicle: string | null;
+      linked_trip_price: number | null;
+      execution_transport_price: number | null;
       summary: string;
     } | null;
     reloading_after: {
       cargo_leg_id: string;
+      responsible_organization_id: string | null;
       organization_name: string | null;
       warehouse_name: string | null;
       linked_trip_number: string | null;
+      linked_trip_vehicle: string | null;
+      linked_trip_price: number | null;
+      execution_transport_price: number | null;
       summary: string;
     } | null;
     distribution: {
       cargo_leg_id: string;
+      responsible_organization_id: string | null;
       organization_name: string | null;
       warehouse_name: string | null;
       linked_trip_number: string | null;
+      linked_trip_vehicle: string | null;
+      linked_trip_price: number | null;
+      execution_transport_price: number | null;
       summary: string;
     } | null;
   } | null;
@@ -710,19 +784,22 @@ function buildOrderRow(params: {
     ? formatCompanyDisplayName(client)
     : fullVisibility
       ? sourceOrganization?.name || '-'
-      : '-';
+      : sourceOrganization?.name || '-';
   const contactDisplay = sameOrganization
     ? formatExtraInfo([order.received_from_name, order.received_from_contact])
     : fullVisibility
       ? formatPerson(createdByUser)
-      : '-';
+      : formatPerson(createdByUser);
   const revenueValue = sameOrganization && fullVisibility ? order.price ?? null : null;
   const costValue =
-    linkedTrip &&
-    !linkedTrip.is_groupage &&
-    linkedTrip.organization_id === effectiveOrganizationId
-      ? linkedTrip.price ?? null
-      : null;
+    params.visibilityMode === 'route'
+      ? params.routeSteps?.collection?.execution_transport_price ?? null
+      : fullVisibility &&
+          linkedTrip &&
+          !linkedTrip.is_groupage &&
+          linkedTrip.organization_id === effectiveOrganizationId
+        ? linkedTrip.price ?? null
+        : null;
   const profitValue =
     revenueValue !== null && costValue !== null ? revenueValue - costValue : null;
 
@@ -788,7 +865,12 @@ function buildOrderRow(params: {
     profit_display: formatMoney(profitValue, 'EUR'),
     trip_display: linkedTrip?.trip_number ?? '-',
     trip_status: linkedTrip?.status ?? null,
-    vehicle_display: linkedTrip ? buildVehicleSummary(linkedTrip) : '-',
+    vehicle_display:
+      params.visibilityMode === 'route'
+        ? params.routeSteps?.collection?.linked_trip_vehicle || '-'
+        : linkedTrip
+          ? buildVehicleSummary(linkedTrip)
+          : '-',
     open_order_id: order.id,
     open_trip_id: linkedTrip?.id ?? null,
     field_states: {},
@@ -1188,7 +1270,7 @@ export async function GET(req: NextRequest) {
       }
 
       const contactState = getWorkflowFieldState('order', orderRecordId, 'contact');
-      if (contactState) {
+      if (contactState && row.visibility_mode !== 'route') {
         nextRow.contact_display = contactState.value_text || '-';
         nextRow.field_states.contact = contactState;
       }
@@ -1288,6 +1370,7 @@ export async function GET(req: NextRequest) {
     ) => {
       const nextRow = { ...row, field_states: { ...(row.field_states || {}) } };
       const tripRecordId = row.trip_id as string | null;
+      const isRouteVisibility = row.visibility_mode === 'route';
 
       const statusState =
         options?.includeStatus
@@ -1309,7 +1392,9 @@ export async function GET(req: NextRequest) {
         nextRow.field_states.contact = contactState;
       }
 
-      const prepState = getWorkflowFieldState('trip', tripRecordId, 'prep');
+      const prepState = isRouteVisibility
+        ? null
+        : getWorkflowFieldState('trip', tripRecordId, 'prep');
       if (prepState) {
         const prepSchedule = parseWorkflowScheduleValueText(prepState.value_text);
         nextRow.prep_date = prepSchedule?.date ?? null;
@@ -1319,7 +1404,9 @@ export async function GET(req: NextRequest) {
         nextRow.field_states.prep = prepState;
       }
 
-      const deliveryState = getWorkflowFieldState('trip', tripRecordId, 'delivery');
+      const deliveryState = isRouteVisibility
+        ? null
+        : getWorkflowFieldState('trip', tripRecordId, 'delivery');
       if (deliveryState) {
         const deliverySchedule = parseWorkflowScheduleValueText(deliveryState.value_text);
         nextRow.delivery_date = deliverySchedule?.date ?? null;
@@ -1330,7 +1417,7 @@ export async function GET(req: NextRequest) {
       }
 
       const costState =
-        options?.includeCost
+        !isRouteVisibility && options?.includeCost
           ? getWorkflowFieldState('trip', tripRecordId, 'cost')
           : null;
       if (costState) {
@@ -1340,7 +1427,7 @@ export async function GET(req: NextRequest) {
       }
 
       const tripVehicleState =
-        options?.includeTripVehicle
+        !isRouteVisibility && options?.includeTripVehicle
           ? getWorkflowFieldState('trip', tripRecordId, 'trip_vehicle')
           : null;
       if (tripVehicleState) {

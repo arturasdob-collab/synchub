@@ -3,6 +3,7 @@ import { createServerClient } from '@supabase/auth-helpers-nextjs';
 import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 import { loadManageableOrderTripLinkContext } from '@/lib/server/cargo-legs';
+import { loadEditableCargoLegExecutionContext } from '@/lib/server/cargo-leg-execution';
 
 function mapTripOption(trip: any) {
   const carrier = Array.isArray(trip.carrier)
@@ -87,11 +88,27 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const { profile } = await loadManageableOrderTripLinkContext(
-      serviceSupabase,
-      user.id,
-      orderTripLinkId
-    );
+    let profile: any;
+
+    try {
+      const manageableContext = await loadManageableOrderTripLinkContext(
+        serviceSupabase,
+        user.id,
+        orderTripLinkId
+      );
+      profile = manageableContext.profile;
+    } catch (error) {
+      if (!cargoLegId) {
+        throw error;
+      }
+
+      const executionContext = await loadEditableCargoLegExecutionContext(
+        serviceSupabase,
+        user.id,
+        cargoLegId
+      );
+      profile = executionContext.profile;
+    }
 
     let effectiveOrganizationId = requestedResponsibleOrganizationId || null;
 
@@ -153,7 +170,38 @@ export async function GET(req: NextRequest) {
       matchedTripQuery = matchedTripQuery.eq('organization_id', effectiveOrganizationId);
     }
 
-    const { data: matchedTrip, error: matchedTripError } = await matchedTripQuery.maybeSingle();
+    let { data: matchedTrip, error: matchedTripError } = await matchedTripQuery.maybeSingle();
+
+    if (!matchedTrip && !matchedTripError && effectiveOrganizationId) {
+      const fallbackTripQuery = serviceSupabase
+        .from('trips')
+        .select(
+          `
+            id,
+            trip_number,
+            status,
+            driver_name,
+            truck_plate,
+            trailer_plate,
+            is_groupage,
+            organization_id,
+            created_by,
+            created_by_user:created_by (
+              first_name,
+              last_name
+            ),
+            carrier:carrier_company_id (
+              name,
+              company_code
+            )
+          `
+        )
+        .eq('trip_number', tripNumberQuery);
+
+      const fallbackResult = await fallbackTripQuery.maybeSingle();
+      matchedTrip = fallbackResult.data;
+      matchedTripError = fallbackResult.error;
+    }
 
     if (matchedTripError) {
       return NextResponse.json({ error: matchedTripError.message }, { status: 500 });

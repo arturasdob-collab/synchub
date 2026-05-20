@@ -3,6 +3,148 @@ import { createServerClient } from '@supabase/auth-helpers-nextjs';
 import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 import { loadEditableCargoLegExecutionContext } from '@/lib/server/cargo-leg-execution';
+import {
+  buildWorkflowFieldCompositeKey,
+  loadWorkflowFieldUpdates,
+  upsertWorkflowFieldUpdate,
+} from '@/lib/server/workflow-field-updates';
+
+const AUTO_WORKFLOW_ROUTE_STATUS_SEQUENCE = [
+  'active',
+  'planned',
+  'at_loading_place',
+  'at_customs',
+  'loaded',
+  'in_transit',
+  'loaded_to_warehouse',
+  'at_warehouse',
+  'loaded_to_international_truck',
+  'unloaded_in_warehouse',
+  'delivered',
+] as const;
+
+function normalizeAutoWorkflowStatus(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  if (value === 'finished') {
+    return 'delivered';
+  }
+
+  return (AUTO_WORKFLOW_ROUTE_STATUS_SEQUENCE as readonly string[]).includes(value)
+    ? value
+    : null;
+}
+
+async function syncOrderWorkflowStatusFromRouteStep(
+  serviceSupabase: any,
+  params: {
+    orderTripLinkId: string;
+    organizationId: string;
+    updatedBy: string;
+  }
+) {
+  const { data: orderTripLink, error: orderTripLinkError } = await serviceSupabase
+    .from('order_trip_links')
+    .select(
+      `
+        order_id,
+        order:order_id (
+          organization_id,
+          status
+        )
+      `
+    )
+    .eq('id', params.orderTripLinkId)
+    .single();
+
+  if (orderTripLinkError || !orderTripLink?.order_id) {
+    throw new Error(orderTripLinkError?.message || 'Order-trip link not found');
+  }
+
+  const orderRecord = Array.isArray((orderTripLink as any).order)
+    ? (orderTripLink as any).order[0] ?? null
+    : (orderTripLink as any).order;
+  const orderId = orderTripLink.order_id as string;
+  const orderOrganizationId =
+    typeof orderRecord?.organization_id === 'string' && orderRecord.organization_id.trim() !== ''
+      ? orderRecord.organization_id
+      : params.organizationId;
+  const baseOrderStatus =
+    typeof orderRecord?.status === 'string' ? orderRecord.status.trim().toLowerCase() : null;
+
+  const workflowUpdates = await loadWorkflowFieldUpdates(serviceSupabase, {
+    recordType: 'order',
+    recordIds: [orderId],
+  });
+  const currentStatusOverride =
+    workflowUpdates.get(
+      buildWorkflowFieldCompositeKey({
+        recordType: 'order',
+        recordId: orderId,
+        fieldKey: 'status',
+      })
+    )?.value_text ?? null;
+  const currentEffectiveStatus = (currentStatusOverride ?? baseOrderStatus)?.trim().toLowerCase() || null;
+
+  if (currentEffectiveStatus === 'finished') {
+    return;
+  }
+
+  const { data: cargoLegExecutions, error: cargoLegExecutionsError } = await serviceSupabase
+    .from('cargo_legs')
+    .select(
+      `
+        execution_detail:cargo_leg_execution_details (
+          step_status
+        )
+      `
+    )
+    .eq('order_trip_link_id', params.orderTripLinkId);
+
+  if (cargoLegExecutionsError) {
+    throw new Error(cargoLegExecutionsError.message);
+  }
+
+  let derivedStatus: string | null = null;
+  let highestIndex = -1;
+
+  for (const cargoLeg of cargoLegExecutions || []) {
+    const executionDetail = Array.isArray((cargoLeg as any).execution_detail)
+      ? (cargoLeg as any).execution_detail[0] ?? null
+      : (cargoLeg as any).execution_detail;
+    const normalizedStatus = normalizeAutoWorkflowStatus(
+      typeof executionDetail?.step_status === 'string' ? executionDetail.step_status : null
+    );
+
+    if (!normalizedStatus) {
+      continue;
+    }
+
+    const statusIndex = AUTO_WORKFLOW_ROUTE_STATUS_SEQUENCE.indexOf(
+      normalizedStatus as (typeof AUTO_WORKFLOW_ROUTE_STATUS_SEQUENCE)[number]
+    );
+
+    if (statusIndex > highestIndex) {
+      highestIndex = statusIndex;
+      derivedStatus = normalizedStatus;
+    }
+  }
+
+  if (!derivedStatus || derivedStatus === currentEffectiveStatus) {
+    return;
+  }
+
+  await upsertWorkflowFieldUpdate(serviceSupabase, {
+    organizationId: orderOrganizationId,
+    recordType: 'order',
+    recordId: orderId,
+    fieldKey: 'status',
+    value: derivedStatus,
+    updatedBy: params.updatedBy,
+  });
+}
 
 function normalizeText(value: unknown) {
   if (typeof value !== 'string') {
@@ -75,6 +217,7 @@ function normalizeStepStatus(value: unknown) {
 
   return [
     'active',
+    'planned',
     'at_loading_place',
     'at_customs',
     'loaded',
@@ -213,6 +356,12 @@ export async function POST(req: Request) {
         { status: 500 }
       );
     }
+
+    await syncOrderWorkflowStatusFromRouteStep(serviceSupabase, {
+      orderTripLinkId: cargoLeg.order_trip_link_id as string,
+      organizationId: cargoLeg.organization_id as string,
+      updatedBy: user.id,
+    });
 
     return NextResponse.json({
       success: true,
