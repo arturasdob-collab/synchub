@@ -234,6 +234,7 @@ type CargoLegRow = {
     actual_time_from: string | null;
     actual_time_to: string | null;
     transport_price: number | null;
+    transport_price_currency: 'EUR' | 'PLN' | null;
     truck_plate: string | null;
     trailer_plate: string | null;
     driver_name: string | null;
@@ -747,12 +748,15 @@ function getCargoLegExecutionPriceLabel(legType: CargoLegType) {
   }
 }
 
-function formatExecutionPrice(value: number | null | undefined) {
+function formatExecutionPrice(
+  value: number | null | undefined,
+  currency: 'EUR' | 'PLN' | null | undefined = 'EUR'
+) {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return null;
   }
 
-  return `${value} EUR`;
+  return `${value} ${currency === 'PLN' ? 'PLN' : 'EUR'}`;
 }
 
 function formatCargoLegExecutionStatusLabel(value: string | null | undefined) {
@@ -4580,14 +4584,16 @@ export default function OrderPage() {
                                     ) : null}
 
                                     {formatExecutionPrice(
-                                      cargoLeg.execution_detail.transport_price
+                                      cargoLeg.execution_detail.transport_price,
+                                      cargoLeg.execution_detail.transport_price_currency
                                     ) ? (
                                       <span>
                                         <span className="font-medium text-slate-700">
                                           {getCargoLegExecutionPriceLabel(cargoLeg.leg_type)}:
                                         </span>{' '}
                                         {formatExecutionPrice(
-                                          cargoLeg.execution_detail.transport_price
+                                          cargoLeg.execution_detail.transport_price,
+                                          cargoLeg.execution_detail.transport_price_currency
                                         )}
                                       </span>
                                     ) : null}

@@ -204,6 +204,16 @@ function normalizeMoney(value: unknown) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function normalizePriceCurrency(value: unknown) {
+  const normalized = normalizeText(value);
+
+  if (!normalized) {
+    return 'EUR';
+  }
+
+  return normalized === 'PLN' ? 'PLN' : 'EUR';
+}
+
 function normalizeBoolean(value: unknown) {
   return value === true || value === 'true' || value === 1 || value === '1';
 }
@@ -293,6 +303,9 @@ export async function POST(req: Request) {
       actual_time_from: normalizeTime(body.actual_time_from ?? body.actualTimeFrom),
       actual_time_to: normalizeTime(body.actual_time_to ?? body.actualTimeTo),
       transport_price: normalizeMoney(body.transport_price ?? body.transportPrice),
+      transport_price_currency: normalizePriceCurrency(
+        body.transport_price_currency ?? body.transportPriceCurrency
+      ),
       truck_plate: normalizeText(body.truck_plate ?? body.truckPlate),
       trailer_plate: normalizeText(body.trailer_plate ?? body.trailerPlate),
       driver_name: normalizeText(body.driver_name ?? body.driverName),
@@ -335,6 +348,7 @@ export async function POST(req: Request) {
           actual_time_from,
           actual_time_to,
           transport_price,
+          transport_price_currency,
           truck_plate,
           trailer_plate,
           driver_name,

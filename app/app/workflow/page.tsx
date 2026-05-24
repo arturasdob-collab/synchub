@@ -61,6 +61,7 @@ type WorkflowRouteStepDisplay = {
   linked_trip_vehicle: string | null;
   linked_trip_price?: number | null;
   execution_transport_price?: number | null;
+  execution_transport_price_currency?: 'EUR' | 'PLN';
   summary: string;
 };
 
@@ -231,6 +232,7 @@ type WorkflowCargoLegExecutionDetail = {
   actual_time_from: string | null;
   actual_time_to: string | null;
   transport_price: number | null;
+  transport_price_currency: 'EUR' | 'PLN' | null;
   truck_plate: string | null;
   trailer_plate: string | null;
   driver_name: string | null;
@@ -407,6 +409,7 @@ type WorkflowCollectionEditorState = {
   execution_time_from: string;
   execution_time_to: string;
   transport_price: string;
+  transport_price_currency: 'EUR' | 'PLN';
   truck_plate: string;
   trailer_plate: string;
   driver_name: string;
@@ -438,6 +441,7 @@ type WorkflowInternationalRouteDetailsState = {
   execution_time_from: string;
   execution_time_to: string;
   transport_price: string;
+  transport_price_currency: 'EUR' | 'PLN';
   truck_plate: string;
   trailer_plate: string;
   driver_name: string;
@@ -546,6 +550,8 @@ const WORKFLOW_TIME_SELECT_OPTIONS = Array.from({ length: 96 }, (_, index) => {
 
   return { value, label: value };
 });
+
+const WORKFLOW_PRICE_CURRENCY_OPTIONS = ['EUR', 'PLN'] as const;
 
 function canEditWorkflowRouteSetup(params: {
   viewerIsElevated: boolean;
@@ -1286,7 +1292,24 @@ function getWorkflowRouteStepDisplay(
 function buildWorkflowExecutionEditorState(
   cargoLeg: WorkflowCargoLegRow | null,
   matchedTrip: WorkflowRouteTripOption | null
-) {
+): Pick<
+  WorkflowCollectionEditorState,
+  | 'step_status'
+  | 'execution_date'
+  | 'execution_time_from'
+  | 'execution_time_to'
+  | 'transport_price'
+  | 'transport_price_currency'
+  | 'truck_plate'
+  | 'trailer_plate'
+  | 'driver_name'
+  | 'driver_phone'
+  | 'manager_notes'
+  | 'arrival_confirmed'
+  | 'dimensions_checked'
+  | 'cargo_matches'
+  | 'damaged_reported'
+> {
   const execution = cargoLeg?.execution_detail;
 
   return {
@@ -1298,6 +1321,7 @@ function buildWorkflowExecutionEditorState(
       execution?.transport_price !== null && execution?.transport_price !== undefined
         ? String(execution.transport_price)
         : '',
+    transport_price_currency: execution?.transport_price_currency === 'PLN' ? 'PLN' : 'EUR',
     truck_plate:
       execution?.truck_plate || cargoLeg?.linked_trip?.truck_plate || matchedTrip?.truck_plate || '',
     trailer_plate:
@@ -2610,6 +2634,7 @@ function WorkflowInternationalRouteDetailsOverlay({
         | 'execution_time_from'
         | 'execution_time_to'
         | 'transport_price'
+        | 'transport_price_currency'
         | 'truck_plate'
         | 'trailer_plate'
         | 'driver_name'
@@ -2770,7 +2795,7 @@ function WorkflowInternationalRouteDetailsOverlay({
                 </div>
               </div>
 
-              <div className="grid gap-2 md:grid-cols-[148px_84px_84px_120px]">
+              <div className="grid gap-2 md:grid-cols-[148px_84px_84px_140px]">
                 <div className="md:col-span-3 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
                   Loading date
                 </div>
@@ -2778,7 +2803,7 @@ function WorkflowInternationalRouteDetailsOverlay({
                   Transport price
                 </div>
               </div>
-              <div className="grid gap-2 md:grid-cols-[148px_84px_84px_120px]">
+              <div className="grid gap-2 md:grid-cols-[148px_84px_84px_140px]">
                 <div>
                   <input
                     type="date"
@@ -2819,14 +2844,33 @@ function WorkflowInternationalRouteDetailsOverlay({
                   </select>
                 </div>
                 <div>
-                  <input
-                    type="text"
-                    value={details.transport_price}
-                    onChange={(event) => onChange({ transport_price: event.target.value })}
-                    placeholder="0.00"
-                    disabled={controlsDisabled}
-                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs disabled:cursor-not-allowed disabled:bg-slate-100"
-                  />
+                  <div className="flex overflow-hidden rounded-md border border-slate-300 bg-white">
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={details.transport_price}
+                      onChange={(event) => onChange({ transport_price: event.target.value })}
+                      placeholder="0.00"
+                      disabled={controlsDisabled}
+                      className="min-w-0 flex-1 border-0 bg-transparent px-2 py-1 text-xs outline-none disabled:cursor-not-allowed disabled:bg-slate-100"
+                    />
+                    <select
+                      value={details.transport_price_currency}
+                      onChange={(event) =>
+                        onChange({
+                          transport_price_currency: event.target.value as 'EUR' | 'PLN',
+                        })
+                      }
+                      disabled={controlsDisabled}
+                      className="w-[58px] shrink-0 border-0 border-l border-slate-300 bg-slate-50 px-1 py-1 text-[10px] font-medium outline-none disabled:cursor-not-allowed disabled:bg-slate-100"
+                    >
+                      {WORKFLOW_PRICE_CURRENCY_OPTIONS.map((currency) => (
+                        <option key={`intl-price-${currency}`} value={currency}>
+                          {currency}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
 
@@ -3367,7 +3411,7 @@ function WorkflowCollectionRouteEditorOverlay({
                   </div>
                 </div>
 
-                <div className="grid gap-2 md:grid-cols-[148px_84px_84px_120px]">
+                <div className="grid gap-2 md:grid-cols-[148px_84px_84px_140px]">
                   <div className="md:col-span-3 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
                     {executionLabel}
                   </div>
@@ -3375,7 +3419,7 @@ function WorkflowCollectionRouteEditorOverlay({
                     {priceLabel}
                   </div>
                 </div>
-                <div className="grid gap-2 md:grid-cols-[148px_84px_84px_120px]">
+                <div className="grid gap-2 md:grid-cols-[148px_84px_84px_140px]">
                   <div>
                     <input
                       type="date"
@@ -3420,15 +3464,33 @@ function WorkflowCollectionRouteEditorOverlay({
                     </select>
                   </div>
                   <div>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      placeholder="0.00"
-                      value={editor.transport_price}
-                      onChange={(event) => onChange({ transport_price: event.target.value })}
-                      disabled={executionControlsDisabled}
-                      className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-                    />
+                    <div className="flex overflow-hidden rounded-md border border-slate-300 bg-white">
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        placeholder="0.00"
+                        value={editor.transport_price}
+                        onChange={(event) => onChange({ transport_price: event.target.value })}
+                        disabled={executionControlsDisabled}
+                        className="min-w-0 flex-1 border-0 bg-transparent px-2 py-1 text-xs outline-none"
+                      />
+                      <select
+                        value={editor.transport_price_currency}
+                        onChange={(event) =>
+                          onChange({
+                            transport_price_currency: event.target.value as 'EUR' | 'PLN',
+                          })
+                        }
+                        disabled={executionControlsDisabled}
+                        className="w-[58px] shrink-0 border-0 border-l border-slate-300 bg-slate-50 px-1 py-1 text-[10px] font-medium outline-none"
+                      >
+                        {WORKFLOW_PRICE_CURRENCY_OPTIONS.map((currency) => (
+                          <option key={`${editor.step_key}-price-${currency}`} value={currency}>
+                            {currency}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -6238,6 +6300,10 @@ export default function WorkflowPage() {
           tripDetails?.workflow_prep_time_to ||
           '',
         transport_price: fallbackPrice,
+        transport_price_currency:
+          internationalCargoLeg?.execution_detail?.transport_price_currency === 'PLN'
+            ? 'PLN'
+            : 'EUR',
         truck_plate:
           internationalCargoLeg?.execution_detail?.truck_plate ||
           matchedTrip?.truck_plate ||
@@ -6470,6 +6536,7 @@ export default function WorkflowPage() {
         actual_time_from: null,
         actual_time_to: null,
         transport_price: editor.transport_price || null,
+        transport_price_currency: editor.transport_price_currency,
         truck_plate: editor.truck_plate || null,
         trailer_plate: editor.trailer_plate || null,
         driver_name: editor.driver_name || null,
@@ -6518,6 +6585,7 @@ export default function WorkflowPage() {
           actual_time_from: null,
           actual_time_to: null,
           transport_price: internationalRouteDetails.transport_price || null,
+          transport_price_currency: internationalRouteDetails.transport_price_currency,
           truck_plate: internationalRouteDetails.truck_plate || null,
           trailer_plate: internationalRouteDetails.trailer_plate || null,
           driver_name: internationalRouteDetails.driver_name || null,

@@ -449,6 +449,7 @@ async function loadCargoLegTypesByOrderTripLinkId(
       linked_trip_vehicle: string | null;
       linked_trip_price: number | null;
       execution_transport_price: number | null;
+      execution_transport_price_currency: 'EUR' | 'PLN';
     }>
   >();
 
@@ -487,6 +488,7 @@ async function loadCargoLegTypesByOrderTripLinkId(
       ),
       execution_detail:cargo_leg_execution_details (
         transport_price,
+        transport_price_currency,
         truck_plate,
         trailer_plate,
         driver_name
@@ -575,6 +577,8 @@ async function loadCargoLegTypesByOrderTripLinkId(
         Number.isFinite(executionDetail.transport_price)
           ? executionDetail.transport_price
           : null,
+      execution_transport_price_currency:
+        executionDetail?.transport_price_currency === 'PLN' ? 'PLN' : 'EUR',
     });
     cargoLegsByOrderTripLinkId.set(key, current);
   }
@@ -635,6 +639,7 @@ function buildWorkflowRouteStepDisplayMap(
     linked_trip_vehicle: string | null;
     linked_trip_price: number | null;
     execution_transport_price: number | null;
+    execution_transport_price_currency: 'EUR' | 'PLN';
   }>
 ) {
   const sortedLegs = [...cargoLegs].sort(
@@ -682,6 +687,7 @@ function buildWorkflowRouteStepDisplayMap(
             linked_trip_vehicle: string | null;
             linked_trip_price: number | null;
             execution_transport_price: number | null;
+            execution_transport_price_currency: 'EUR' | 'PLN';
           }
       | null
   ) =>
@@ -695,6 +701,7 @@ function buildWorkflowRouteStepDisplayMap(
           linked_trip_vehicle: cargoLeg.linked_trip_vehicle,
           linked_trip_price: cargoLeg.linked_trip_price,
           execution_transport_price: cargoLeg.execution_transport_price,
+          execution_transport_price_currency: cargoLeg.execution_transport_price_currency,
           summary: buildRouteStepSummary(cargoLeg),
         }
       : null;
@@ -735,6 +742,7 @@ function buildOrderRow(params: {
       linked_trip_vehicle: string | null;
       linked_trip_price: number | null;
       execution_transport_price: number | null;
+      execution_transport_price_currency: 'EUR' | 'PLN';
       summary: string;
     } | null;
     reloading_before: {
@@ -746,6 +754,7 @@ function buildOrderRow(params: {
       linked_trip_vehicle: string | null;
       linked_trip_price: number | null;
       execution_transport_price: number | null;
+      execution_transport_price_currency: 'EUR' | 'PLN';
       summary: string;
     } | null;
     international: {
@@ -757,6 +766,7 @@ function buildOrderRow(params: {
       linked_trip_vehicle: string | null;
       linked_trip_price: number | null;
       execution_transport_price: number | null;
+      execution_transport_price_currency: 'EUR' | 'PLN';
       summary: string;
     } | null;
     reloading_after: {
@@ -768,6 +778,7 @@ function buildOrderRow(params: {
       linked_trip_vehicle: string | null;
       linked_trip_price: number | null;
       execution_transport_price: number | null;
+      execution_transport_price_currency: 'EUR' | 'PLN';
       summary: string;
     } | null;
     distribution: {
@@ -779,6 +790,7 @@ function buildOrderRow(params: {
       linked_trip_vehicle: string | null;
       linked_trip_price: number | null;
       execution_transport_price: number | null;
+      execution_transport_price_currency: 'EUR' | 'PLN';
       summary: string;
     } | null;
   } | null;
@@ -820,6 +832,10 @@ function buildOrderRow(params: {
           linkedTrip.organization_id === effectiveOrganizationId
         ? linkedTrip.price ?? null
         : null;
+  const costCurrency =
+    params.visibilityMode === 'route'
+      ? params.routeSteps?.collection?.execution_transport_price_currency ?? 'EUR'
+      : 'EUR';
   const profitValue =
     revenueValue !== null && costValue !== null ? revenueValue - costValue : null;
 
@@ -880,7 +896,7 @@ function buildOrderRow(params: {
     revenue_value: revenueValue,
     revenue_display: formatMoney(revenueValue, order.currency ?? 'EUR'),
     cost_value: costValue,
-    cost_display: formatMoney(costValue, 'EUR'),
+    cost_display: formatMoney(costValue, costCurrency),
     profit_value: profitValue,
     profit_display: formatMoney(profitValue, 'EUR'),
     trip_display: linkedTrip?.trip_number ?? '-',
