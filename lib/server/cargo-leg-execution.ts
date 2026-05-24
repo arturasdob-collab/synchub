@@ -34,18 +34,44 @@ export async function loadEditableCargoLegExecutionContext(
     throw new Error('Cargo route step not found');
   }
 
-  if (cargoLeg.organization_id === profile.organization_id) {
-    await loadManageableOrderTripLinkContext(
-      serviceSupabase,
-      userId,
-      cargoLeg.order_trip_link_id
-    );
+  const managerShares = Array.isArray(cargoLeg.manager_shares)
+    ? cargoLeg.manager_shares
+    : cargoLeg.manager_shares
+      ? [cargoLeg.manager_shares]
+      : [];
+  const hasManagerAccess = managerShares.some(
+    (share: any) =>
+      share?.shared_organization_id === profile.organization_id &&
+      share?.manager_user_id === userId
+  );
 
-    return {
-      profile,
-      cargoLeg,
-      effectiveOrganizationId: cargoLeg.organization_id as string,
-    };
+  if (cargoLeg.organization_id === profile.organization_id) {
+    try {
+      await loadManageableOrderTripLinkContext(
+        serviceSupabase,
+        userId,
+        cargoLeg.order_trip_link_id
+      );
+
+      return {
+        profile,
+        cargoLeg,
+        effectiveOrganizationId: cargoLeg.organization_id as string,
+      };
+    } catch (error) {
+      if (
+        cargoLeg.show_to_all_managers ||
+        hasManagerAccess
+      ) {
+        return {
+          profile,
+          cargoLeg,
+          effectiveOrganizationId: cargoLeg.organization_id as string,
+        };
+      }
+
+      throw error;
+    }
   }
 
   if (cargoLeg.responsible_organization_id !== profile.organization_id) {
@@ -59,18 +85,6 @@ export async function loadEditableCargoLegExecutionContext(
       effectiveOrganizationId: cargoLeg.organization_id as string,
     };
   }
-
-  const managerShares = Array.isArray(cargoLeg.manager_shares)
-    ? cargoLeg.manager_shares
-    : cargoLeg.manager_shares
-      ? [cargoLeg.manager_shares]
-      : [];
-
-  const hasManagerAccess = managerShares.some(
-    (share: any) =>
-      share?.shared_organization_id === profile.organization_id &&
-      share?.manager_user_id === userId
-  );
 
   if (!hasManagerAccess) {
     throw new Error('Forbidden');

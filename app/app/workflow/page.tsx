@@ -455,51 +455,88 @@ type WorkflowInternationalRouteDetailsState = {
   } | null;
 };
 
-const WORKFLOW_ROUTE_STEP_STATUS_OPTIONS = [
-  { value: '', label: 'Not set' },
-  { value: 'active', label: 'Active' },
-  { value: 'planned', label: 'Planned' },
-  { value: 'at_loading_place', label: 'At loading place' },
-  { value: 'at_customs', label: 'At customs' },
-  { value: 'loaded', label: 'Loaded' },
-  { value: 'in_transit', label: 'In transit' },
-  { value: 'loaded_to_warehouse', label: 'Loaded to warehouse' },
-  { value: 'at_warehouse', label: 'At warehouse' },
-  { value: 'loaded_to_international_truck', label: 'Loaded to international truck' },
-  { value: 'unloaded_in_warehouse', label: 'Unloaded in warehouse' },
-  { value: 'delivered', label: 'Delivered' },
-  { value: 'finished', label: 'Finished' },
-] as const;
+const WORKFLOW_ROUTE_STEP_STATUS_LABELS = {
+  '': 'Not set',
+  active: 'Active',
+  planned: 'Planned',
+  at_loading_place: 'At loading place',
+  at_customs: 'At customs',
+  loaded: 'Loaded',
+  in_transit: 'In transit',
+  loaded_to_warehouse: 'Loaded to warehouse',
+  at_warehouse: 'At warehouse',
+  loaded_to_international_truck: 'Loaded to international truck',
+  unloaded_in_warehouse: 'Unloaded in warehouse',
+  delivered: 'Delivered',
+  finished: 'Finished',
+} as const;
+
+const WORKFLOW_ROUTE_STEP_STATUS_OPTIONS_BY_STEP = {
+  collection: [
+    '',
+    'active',
+    'planned',
+    'at_loading_place',
+    'at_customs',
+    'loaded',
+    'in_transit',
+  ],
+  reloading_before: [
+    '',
+    'active',
+    'planned',
+    'loaded_to_warehouse',
+    'at_warehouse',
+    'loaded_to_international_truck',
+  ],
+  international: [
+    '',
+    'active',
+    'planned',
+    'at_loading_place',
+    'at_customs',
+    'loaded',
+    'in_transit',
+    'unloaded_in_warehouse',
+  ],
+  reloading_after: [
+    '',
+    'active',
+    'planned',
+    'unloaded_in_warehouse',
+    'at_warehouse',
+  ],
+  distribution: [
+    '',
+    'active',
+    'planned',
+    'loaded',
+    'in_transit',
+    'delivered',
+    'finished',
+  ],
+} as const;
+
+function getWorkflowRouteStepStatusOptions(
+  stepKey:
+    | 'collection'
+    | 'reloading_before'
+    | 'international'
+    | 'reloading_after'
+    | 'distribution'
+) {
+  return WORKFLOW_ROUTE_STEP_STATUS_OPTIONS_BY_STEP[stepKey].map((value) => ({
+    value,
+    label: WORKFLOW_ROUTE_STEP_STATUS_LABELS[value],
+  }));
+}
 
 function formatWorkflowRouteStepStatusLabel(value: string | null | undefined) {
-  switch (value) {
-    case 'active':
-      return 'Active';
-    case 'planned':
-      return 'Planned';
-    case 'at_loading_place':
-      return 'At loading place';
-    case 'at_customs':
-      return 'At customs';
-    case 'loaded':
-      return 'Loaded';
-    case 'in_transit':
-      return 'In transit';
-    case 'loaded_to_warehouse':
-      return 'Loaded to warehouse';
-    case 'at_warehouse':
-      return 'At warehouse';
-    case 'loaded_to_international_truck':
-      return 'Loaded to international truck';
-    case 'unloaded_in_warehouse':
-      return 'Unloaded in warehouse';
-    case 'delivered':
-      return 'Delivered';
-    case 'finished':
-      return 'Finished';
-    default:
-      return 'Not set';
-  }
+  return (
+    WORKFLOW_ROUTE_STEP_STATUS_LABELS[
+      (value || '') as keyof typeof WORKFLOW_ROUTE_STEP_STATUS_LABELS
+    ] || 'Not set'
+  );
 }
 
 const WORKFLOW_TIME_SELECT_OPTIONS = Array.from({ length: 96 }, (_, index) => {
@@ -513,7 +550,7 @@ const WORKFLOW_TIME_SELECT_OPTIONS = Array.from({ length: 96 }, (_, index) => {
 function canEditWorkflowRouteSetup(params: {
   viewerIsElevated: boolean;
   currentOrganizationId: string | null;
-  effectiveOrganizationId: string | null;
+  sourceOrganizationId: string | null;
 }) {
   if (params.viewerIsElevated) {
     return true;
@@ -521,8 +558,8 @@ function canEditWorkflowRouteSetup(params: {
 
   return (
     !!params.currentOrganizationId &&
-    !!params.effectiveOrganizationId &&
-    params.currentOrganizationId === params.effectiveOrganizationId
+    !!params.sourceOrganizationId &&
+    params.currentOrganizationId === params.sourceOrganizationId
   );
 }
 
@@ -534,7 +571,10 @@ function canEditWorkflowRouteExecution(params: {
   cargoLeg:
     | Pick<
         WorkflowCargoLegRow,
-        'responsible_organization_id' | 'show_to_all_managers' | 'shared_managers'
+        | 'organization_id'
+        | 'responsible_organization_id'
+        | 'show_to_all_managers'
+        | 'shared_managers'
       >
     | null
     | undefined;
@@ -543,7 +583,7 @@ function canEditWorkflowRouteExecution(params: {
     canEditWorkflowRouteSetup({
       viewerIsElevated: params.viewerIsElevated,
       currentOrganizationId: params.currentOrganizationId,
-      effectiveOrganizationId: params.effectiveOrganizationId,
+      sourceOrganizationId: params.cargoLeg?.organization_id ?? null,
     })
   ) {
     return true;
@@ -2721,7 +2761,7 @@ function WorkflowInternationalRouteDetailsOverlay({
                     disabled={controlsDisabled}
                     className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs disabled:cursor-not-allowed disabled:bg-slate-100"
                   >
-                    {WORKFLOW_ROUTE_STEP_STATUS_OPTIONS.map((option) => (
+                    {getWorkflowRouteStepStatusOptions('international').map((option) => (
                       <option key={option.value} value={option.value}>
                         {option.label}
                       </option>
@@ -3057,6 +3097,25 @@ function WorkflowCollectionRouteEditorOverlay({
   const routeMode = getWorkflowRouteEditorRouteMode(editor.step_key);
   const modeRequiresRoute = editor.mode === routeMode;
   const tripHint = WORKFLOW_ROUTE_EDITOR_CONFIG[editor.step_key].emptyTripHint;
+  const selectedOrganization =
+    organizations.find((organization) => organization.id === organizationValue) || null;
+  const selectedManager =
+    editor.show_to_all_managers
+      ? null
+      : managers.find((manager) => manager.id === editor.manager_user_ids[0]) || null;
+  const matchedTripManagerLabel = formatManagerLabel(matchedTrip?.created_by_user);
+  const matchedTripInfoLinePrimary = matchedTrip?.trip_number || editor.linked_trip_number || null;
+  const matchedTripInfoLineSecondary =
+    matchedTrip?.carrier?.name || selectedOrganization?.name || null;
+  const matchedTripInfoLineTertiary =
+    [
+      matchedTripManagerLabel !== '-' ? matchedTripManagerLabel : null,
+      matchedTrip?.driver_name || null,
+      matchedTrip?.truck_plate || null,
+      selectedManager && matchedTripManagerLabel === '-' ? formatManagerLabel(selectedManager) : null,
+    ]
+      .filter(Boolean)
+      .join(' / ') || null;
   const isReloadingStep =
     editor.step_key === 'reloading_before' || editor.step_key === 'reloading_after';
   const isTransportStep = !isReloadingStep;
@@ -3265,19 +3324,15 @@ function WorkflowCollectionRouteEditorOverlay({
               <span className="text-slate-500">Looking up route...</span>
             ) : matchedTrip ? (
               <div className="space-y-1">
-                <div className="font-medium text-slate-900">
-                  {matchedTrip.trip_number}
-                </div>
-                <div>{matchedTrip.carrier?.name || '-'}</div>
-                <div className="text-slate-500">
-                  {[
-                    formatManagerLabel(matchedTrip.created_by_user),
-                    matchedTrip.driver_name,
-                    matchedTrip.truck_plate,
-                  ]
-                    .filter(Boolean)
-                    .join(' / ') || '-'}
-                </div>
+                {matchedTripInfoLinePrimary ? (
+                  <div className="font-medium text-slate-900">
+                    {matchedTripInfoLinePrimary}
+                  </div>
+                ) : null}
+                {matchedTripInfoLineSecondary ? <div>{matchedTripInfoLineSecondary}</div> : null}
+                {matchedTripInfoLineTertiary ? (
+                  <div className="text-slate-500">{matchedTripInfoLineTertiary}</div>
+                ) : null}
               </div>
             ) : (
               <span className="text-slate-500">
@@ -3303,7 +3358,7 @@ function WorkflowCollectionRouteEditorOverlay({
                       disabled={executionControlsDisabled}
                       className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
                     >
-                      {WORKFLOW_ROUTE_STEP_STATUS_OPTIONS.map((option) => (
+                      {getWorkflowRouteStepStatusOptions(editor.step_key).map((option) => (
                         <option key={option.value || 'empty'} value={option.value}>
                           {option.label}
                         </option>
@@ -5432,6 +5487,11 @@ export default function WorkflowPage() {
       return;
     }
 
+    if (!collectionRouteEditor.can_edit_setup) {
+      setCollectionRouteEditorLookupLoading(false);
+      return;
+    }
+
     const query = collectionRouteEditor.linked_trip_number.trim();
 
     if (!query || !collectionRouteEditor.order_trip_link_id) {
@@ -6263,7 +6323,8 @@ export default function WorkflowPage() {
       const canEditSetup = canEditWorkflowRouteSetup({
         viewerIsElevated,
         currentOrganizationId,
-        effectiveOrganizationId,
+        sourceOrganizationId:
+          activeLinkedTrip.organization_id || stepCargoLeg?.organization_id || null,
       });
       const canEditExecution = canEditWorkflowRouteExecution({
         viewerIsElevated,
@@ -6315,6 +6376,14 @@ export default function WorkflowPage() {
       manager_user_ids?: string;
       linked_trip_number?: string;
     } = {};
+    const existingStepCargoLeg =
+      findWorkflowRouteEditorCargoLeg(editor.existing_cargo_legs, editor.step_key) || null;
+    const existingLinkedTrip = existingStepCargoLeg?.linked_trip || null;
+    const normalizedEditorRouteNumber = editor.linked_trip_number.trim().toUpperCase();
+    const existingRouteMatches =
+      !!existingLinkedTrip?.id &&
+      normalizedEditorRouteNumber !== '' &&
+      (existingLinkedTrip.trip_number || '').trim().toUpperCase() === normalizedEditorRouteNumber;
 
     if (editor.mode !== getWorkflowRouteEditorRouteMode(editor.step_key)) {
       setCollectionRouteEditorErrors(nextErrors);
@@ -6329,7 +6398,7 @@ export default function WorkflowPage() {
       nextErrors.manager_user_ids = 'Choose manager or All';
     }
 
-    if (!collectionRouteEditorMatchedTrip?.id) {
+    if (!collectionRouteEditorMatchedTrip?.id && !existingRouteMatches) {
       nextErrors.linked_trip_number = `Choose existing ${getWorkflowRouteEditorLabel(editor.step_key).toLowerCase()} route or create a new one`;
     }
 

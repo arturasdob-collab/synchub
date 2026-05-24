@@ -486,7 +486,10 @@ async function loadCargoLegTypesByOrderTripLinkId(
         )
       ),
       execution_detail:cargo_leg_execution_details (
-        transport_price
+        transport_price,
+        truck_plate,
+        trailer_plate,
+        driver_name
       )
     `
     )
@@ -525,6 +528,15 @@ async function loadCargoLegTypesByOrderTripLinkId(
     const executionDetail = Array.isArray((row as any).execution_detail)
       ? (row as any).execution_detail[0] ?? null
       : (row as any).execution_detail;
+    const executionVehicleSummary =
+      [
+        executionDetail?.driver_name,
+        executionDetail?.truck_plate,
+        executionDetail?.trailer_plate,
+      ]
+        .map((value) => (typeof value === 'string' ? value.trim() : ''))
+        .filter((value) => value !== '')
+        .join(' / ') || null;
     current.push({
       id: (row as any).id as string,
       leg_order:
@@ -549,6 +561,7 @@ async function loadCargoLegTypesByOrderTripLinkId(
           ? `${linkedTripCreatedByUser.first_name || ''} ${linkedTripCreatedByUser.last_name || ''}`.trim() || null
           : null,
       linked_trip_vehicle:
+        executionVehicleSummary ||
         [linkedTrip?.driver_name, linkedTrip?.truck_plate, linkedTrip?.trailer_plate]
           .map((value) => (typeof value === 'string' ? value.trim() : ''))
           .filter((value) => value !== '')
@@ -576,6 +589,7 @@ function buildRouteStepSummary(step: {
   linked_trip_number: string | null;
   linked_trip_carrier_name: string | null;
   linked_trip_manager_name: string | null;
+  linked_trip_vehicle?: string | null;
 }) {
   if (step.leg_type === 'international_trip') {
     return [
@@ -588,12 +602,18 @@ function buildRouteStepSummary(step: {
   }
 
   if (step.leg_type === 'collection') {
+    const vehicleSummary =
+      typeof step.linked_trip_vehicle === 'string' ? step.linked_trip_vehicle.trim() : '';
     const carrierName =
       typeof step.linked_trip_carrier_name === 'string'
         ? step.linked_trip_carrier_name.trim()
         : '';
+    const organizationName =
+      typeof step.responsible_organization_name === 'string'
+        ? step.responsible_organization_name.trim()
+        : '';
 
-    return carrierName || '-';
+    return vehicleSummary || carrierName || organizationName || '-';
   }
 
   const location = step.responsible_warehouse_name || step.responsible_organization_name || '-';
