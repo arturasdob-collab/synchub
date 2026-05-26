@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { isFullInternalWorkspaceMode } from '@/lib/constants/organization-workspace';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -54,6 +55,22 @@ export async function GET(req: NextRequest) {
 
     if (callerProfile.disabled) {
       return NextResponse.json({ error: 'Account disabled' }, { status: 403 });
+    }
+
+    if (!callerProfile.is_super_admin) {
+      const { data: callerOrganization, error: callerOrganizationError } = await adminClient
+        .from('organizations')
+        .select('id, workspace_mode')
+        .eq('id', callerProfile.organization_id)
+        .maybeSingle();
+
+      if (callerOrganizationError || !callerOrganization) {
+        return NextResponse.json({ error: 'Organization not found' }, { status: 403 });
+      }
+
+      if (!isFullInternalWorkspaceMode(callerOrganization.workspace_mode)) {
+        return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+      }
     }
 
     const userId =

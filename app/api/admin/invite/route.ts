@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { isFullInternalWorkspaceMode } from '@/lib/constants/organization-workspace';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -43,7 +44,7 @@ export async function POST(request: NextRequest) {
 
     const { data: inviterProfile, error: inviterErr } = await adminClient
       .from('user_profiles')
-      .select('role, organization_id, disabled, email')
+      .select('role, organization_id, disabled, email, is_super_admin')
       .eq('id', user.id)
       .maybeSingle();
 
@@ -67,7 +68,7 @@ export async function POST(request: NextRequest) {
     const inviterRole = (inviterProfile.role as string) || '';
     const inviterOrgId = (inviterProfile.organization_id as string | null) ?? null;
 
-    const isSuperAdmin = inviterRole === 'SUPER_ADMIN';
+    const isSuperAdmin = !!inviterProfile.is_super_admin || inviterRole === 'SUPER_ADMIN';
     const isOwnerOrAdmin = inviterRole === 'OWNER' || inviterRole === 'ADMIN';
 
     if (!isSuperAdmin && !isOwnerOrAdmin) {
@@ -103,12 +104,22 @@ export async function POST(request: NextRequest) {
 
     const { data: selectedOrg, error: selectedOrgErr } = await adminClient
       .from('organizations')
-      .select('id, name')
+      .select('id, name, workspace_mode')
       .eq('id', targetOrgId)
       .maybeSingle();
 
     if (selectedOrgErr || !selectedOrg) {
       return NextResponse.json({ error: 'Selected organization not found' }, { status: 400 });
+    }
+
+    if (!isSuperAdmin) {
+      if (targetOrgId !== inviterOrgId) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
+
+      if (!isFullInternalWorkspaceMode(selectedOrg.workspace_mode)) {
+        return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+      }
     }
 
     const { data: existingUser, error: existingUserErr } = await adminClient

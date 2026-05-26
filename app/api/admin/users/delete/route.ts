@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { isFullInternalWorkspaceMode } from '@/lib/constants/organization-workspace';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest) {
 
     const { data: callerProfile, error: callerProfileErr } = await adminClient
       .from('user_profiles')
-      .select('id, email, role, disabled, is_super_admin, is_creator, first_name, last_name')
+      .select('id, email, role, organization_id, disabled, is_super_admin, is_creator, first_name, last_name')
       .eq('id', caller.id)
       .maybeSingle();
 
@@ -54,6 +55,24 @@ export async function POST(req: NextRequest) {
 
     if (!isAllowedCaller) {
       return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+    }
+
+    const isSuperAdmin = !!callerProfile.is_super_admin;
+
+    if (!isSuperAdmin) {
+      const { data: callerOrganization, error: callerOrganizationError } = await adminClient
+        .from('organizations')
+        .select('id, workspace_mode')
+        .eq('id', callerProfile.organization_id)
+        .maybeSingle();
+
+      if (callerOrganizationError || !callerOrganization) {
+        return NextResponse.json({ error: 'Organization not found' }, { status: 403 });
+      }
+
+      if (!isFullInternalWorkspaceMode(callerOrganization.workspace_mode)) {
+        return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+      }
     }
 
     const body = await req.json();
@@ -75,6 +94,10 @@ export async function POST(req: NextRequest) {
 
     if (targetErr || !targetUser) {
       return NextResponse.json({ error: 'Target user not found' }, { status: 404 });
+    }
+
+    if (!isSuperAdmin && targetUser.organization_id !== callerProfile.organization_id) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
     if (targetUser.is_creator) {

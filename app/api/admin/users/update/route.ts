@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { UserRole } from '@/lib/types/database';
+import { isFullInternalWorkspaceMode } from '@/lib/constants/organization-workspace';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -63,6 +64,22 @@ export async function POST(req: NextRequest) {
 
     if (!isSuperAdmin && !isOwner && !isAdmin) {
       return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+    }
+
+    if (!isSuperAdmin) {
+      const { data: callerOrganization, error: callerOrganizationError } = await adminClient
+        .from('organizations')
+        .select('id, workspace_mode')
+        .eq('id', callerProfile.organization_id)
+        .maybeSingle();
+
+      if (callerOrganizationError || !callerOrganization) {
+        return NextResponse.json({ error: 'Organization not found' }, { status: 403 });
+      }
+
+      if (!isFullInternalWorkspaceMode(callerOrganization.workspace_mode)) {
+        return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+      }
     }
 
     const body = await req.json();
