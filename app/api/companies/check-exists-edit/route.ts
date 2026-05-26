@@ -45,20 +45,36 @@ export async function POST(req: Request) {
 
   const { data: profile } = await serviceSupabase
     .from('user_profiles')
-    .select('organization_id')
+    .select('organization_id, is_super_admin, is_creator')
     .eq('id', user.id)
     .single();
 
-  if (!profile?.organization_id) {
-    return NextResponse.json({ error: 'User organization not found' }, { status: 400 });
+  if (!profile) {
+    return NextResponse.json({ error: 'Profile not found' }, { status: 400 });
   }
 
   const queryField = field === 'name' ? 'name' : 'company_code';
+  const canManageAllCompanies = !!profile.is_super_admin || !!profile.is_creator;
+
+  let targetCompanyQuery = serviceSupabase
+    .from('companies')
+    .select('organization_id')
+    .eq('id', id);
+
+  if (!canManageAllCompanies) {
+    targetCompanyQuery = targetCompanyQuery.eq('organization_id', profile.organization_id);
+  }
+
+  const { data: targetCompany } = await targetCompanyQuery.single();
+
+  if (!targetCompany?.organization_id) {
+    return NextResponse.json({ error: 'Company not found' }, { status: 404 });
+  }
 
   const { data, error } = await serviceSupabase
     .from('companies')
     .select('id')
-    .eq('organization_id', profile.organization_id)
+    .eq('organization_id', targetCompany.organization_id)
     .neq('id', id)
     .ilike(queryField, String(value).trim())
     .limit(1);

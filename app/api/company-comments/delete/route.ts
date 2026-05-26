@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/auth-helpers-nextjs';
+import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 
 export async function POST(req: Request) {
@@ -19,6 +20,11 @@ export async function POST(req: Request) {
     }
   );
 
+  const serviceSupabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -33,7 +39,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Missing id' }, { status: 400 });
   }
 
-  const { data: profile } = await supabase
+  const { data: profile } = await serviceSupabase
     .from('user_profiles')
     .select('organization_id,is_super_admin,is_creator,role')
     .eq('id', user.id)
@@ -43,7 +49,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Profile not found' }, { status: 403 });
   }
 
-  const { data: existing } = await supabase
+  const { data: existing } = await serviceSupabase
     .from('company_comments')
     .select('created_by, organization_id')
     .eq('id', id)
@@ -63,11 +69,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'No permission' }, { status: 403 });
   }
 
-  const { error } = await supabase
+  const { error } = await serviceSupabase
     .from('company_comments')
     .delete()
     .eq('id', id)
-    .eq('organization_id', profile.organization_id);
+    .eq('organization_id', existing.organization_id);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });

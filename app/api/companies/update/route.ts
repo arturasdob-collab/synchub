@@ -89,48 +89,70 @@ export async function POST(req: Request) {
 
   const { data: profile } = await serviceSupabase
     .from('user_profiles')
-    .select('organization_id')
+    .select('organization_id, is_super_admin, is_creator')
     .eq('id', user.id)
     .single();
 
-  if (!profile?.organization_id) {
+  if (!profile) {
     return NextResponse.json(
-      { error: 'User organization not found' },
+      { error: 'Profile not found' },
       { status: 400 }
     );
   }
+
+  const canManageAllCompanies = !!profile.is_super_admin || !!profile.is_creator;
+
+  let targetCompanyQuery = serviceSupabase
+    .from('companies')
+    .select('id, organization_id')
+    .eq('id', id);
+
+  if (!canManageAllCompanies) {
+    targetCompanyQuery = targetCompanyQuery.eq('organization_id', profile.organization_id);
+  }
+
+  const { data: targetCompany } = await targetCompanyQuery.single();
+
+  if (!targetCompany?.organization_id) {
+    return NextResponse.json(
+      { error: 'Company not found' },
+      { status: 404 }
+    );
+  }
+
+  const targetOrganizationId = targetCompany.organization_id as string;
   const normalizedName = name.trim();
-const normalizedCode = company_code.trim();
+  const normalizedCode = company_code.trim();
 
-const { data: existingByName } = await serviceSupabase
-  .from('companies')
-  .select('id')
-  .eq('organization_id', profile.organization_id)
-  .ilike('name', normalizedName)
-  .neq('id', id)
-  .limit(1);
+  const { data: existingByName } = await serviceSupabase
+    .from('companies')
+    .select('id')
+    .eq('organization_id', targetOrganizationId)
+    .ilike('name', normalizedName)
+    .neq('id', id)
+    .limit(1);
 
-if (existingByName && existingByName.length > 0) {
-  return NextResponse.json(
-    { error: 'Company with this name already exists' },
-    { status: 400 }
-  );
-}
+  if (existingByName && existingByName.length > 0) {
+    return NextResponse.json(
+      { error: 'Company with this name already exists' },
+      { status: 400 }
+    );
+  }
 
-const { data: existingByCode } = await serviceSupabase
-  .from('companies')
-  .select('id')
-  .eq('organization_id', profile.organization_id)
-  .ilike('company_code', normalizedCode)
-  .neq('id', id)
-  .limit(1);
+  const { data: existingByCode } = await serviceSupabase
+    .from('companies')
+    .select('id')
+    .eq('organization_id', targetOrganizationId)
+    .ilike('company_code', normalizedCode)
+    .neq('id', id)
+    .limit(1);
 
-if (existingByCode && existingByCode.length > 0) {
-  return NextResponse.json(
-    { error: 'Company with this code already exists' },
-    { status: 400 }
-  );
-}
+  if (existingByCode && existingByCode.length > 0) {
+    return NextResponse.json(
+      { error: 'Company with this code already exists' },
+      { status: 400 }
+    );
+  }
 
   const { error } = await serviceSupabase
     .from('companies')
@@ -155,7 +177,7 @@ if (existingByCode && existingByCode.length > 0) {
       notes,
     })
     .eq('id', id)
-    .eq('organization_id', profile.organization_id);
+    .eq('organization_id', targetOrganizationId);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });

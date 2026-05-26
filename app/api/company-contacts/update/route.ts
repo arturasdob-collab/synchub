@@ -54,27 +54,33 @@ export async function POST(req: Request) {
 
   const { data: profile } = await serviceSupabase
     .from('user_profiles')
-    .select('organization_id')
+    .select('organization_id, is_super_admin, is_creator')
     .eq('id', user.id)
     .single();
 
-  if (!profile?.organization_id) {
+  if (!profile) {
     return NextResponse.json(
-      { error: 'User organization not found' },
+      { error: 'Profile not found' },
       { status: 400 }
     );
   }
 
-  const { data: contact } = await serviceSupabase
+  const canManageAllCompanies = !!profile.is_super_admin || !!profile.is_creator;
+
+  let contactQuery = serviceSupabase
     .from('company_contacts')
-    .select('id')
-    .eq('id', id)
-    .eq('organization_id', profile.organization_id)
-    .single();
+    .select('id, organization_id')
+    .eq('id', id);
+
+  if (!canManageAllCompanies) {
+    contactQuery = contactQuery.eq('organization_id', profile.organization_id);
+  }
+
+  const { data: contact } = await contactQuery.single();
 
   if (!contact) {
     return NextResponse.json(
-      { error: 'Contact not found in your organization' },
+      { error: 'Contact not found' },
       { status: 404 }
     );
   }
@@ -90,7 +96,7 @@ export async function POST(req: Request) {
       notes,
     })
     .eq('id', id)
-    .eq('organization_id', profile.organization_id);
+    .eq('organization_id', contact.organization_id);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });

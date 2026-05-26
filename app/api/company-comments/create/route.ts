@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/auth-helpers-nextjs';
+import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 
 export async function POST(req: Request) {
@@ -17,6 +18,11 @@ export async function POST(req: Request) {
         remove() {},
       },
     }
+  );
+
+  const serviceSupabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
   const {
@@ -51,38 +57,44 @@ export async function POST(req: Request) {
     }
   }
 
-  const { data: profile } = await supabase
+  const { data: profile } = await serviceSupabase
     .from('user_profiles')
-    .select('organization_id')
+    .select('organization_id, is_super_admin, is_creator')
     .eq('id', user.id)
     .single();
 
-  if (!profile?.organization_id) {
+  if (!profile) {
     return NextResponse.json(
-      { error: 'User organization not found' },
+      { error: 'Profile not found' },
       { status: 400 }
     );
   }
 
-  const { data: company } = await supabase
+  const canManageAllCompanies = !!profile.is_super_admin || !!profile.is_creator;
+
+  let companyQuery = serviceSupabase
     .from('companies')
     .select('id, organization_id')
-    .eq('id', company_id)
-    .eq('organization_id', profile.organization_id)
-    .single();
+    .eq('id', company_id);
+
+  if (!canManageAllCompanies) {
+    companyQuery = companyQuery.eq('organization_id', profile.organization_id);
+  }
+
+  const { data: company } = await companyQuery.single();
 
   if (!company) {
     return NextResponse.json(
-      { error: 'Company not found in your organization' },
+      { error: 'Company not found' },
       { status: 404 }
     );
   }
 
-  const { error } = await supabase
+  const { error } = await serviceSupabase
     .from('company_comments')
     .insert({
       company_id,
-      organization_id: profile.organization_id,
+      organization_id: company.organization_id,
       comment: comment.trim(),
       rating: rating || null,
       created_by: user.id,

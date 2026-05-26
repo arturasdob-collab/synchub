@@ -75,17 +75,22 @@ export async function GET() {
   try {
     const { data: profile, error: profileError } = await serviceSupabase
       .from('user_profiles')
-      .select('organization_id')
+      .select('organization_id, is_super_admin, is_creator')
       .eq('id', user.id)
       .single();
 
-    if (profileError || !profile?.organization_id) {
+    if (profileError || !profile) {
       return NextResponse.json({ error: 'Profile not found' }, { status: 404 });
     }
 
-    const organizationId = profile.organization_id as string;
+    const organizationId = profile.organization_id as string | null;
+    const canViewAllCompanies = !!profile.is_super_admin || !!profile.is_creator;
 
-    const { data: companies, error: companiesError } = await serviceSupabase
+    if (!canViewAllCompanies && !organizationId) {
+      return NextResponse.json({ error: 'Profile not found' }, { status: 404 });
+    }
+
+    let companiesQuery = serviceSupabase
       .from('companies')
       .select(
         `
@@ -106,8 +111,13 @@ export async function GET() {
           )
         `
       )
-      .eq('organization_id', organizationId)
       .order('name');
+
+    if (!canViewAllCompanies) {
+      companiesQuery = companiesQuery.eq('organization_id', organizationId);
+    }
+
+    const { data: companies, error: companiesError } = await companiesQuery;
 
     if (companiesError) {
       return NextResponse.json({ error: companiesError.message }, { status: 500 });
@@ -117,11 +127,16 @@ export async function GET() {
     const ratingsByCompanyId = new Map<string, number | null>();
 
     if (companyIds.length > 0) {
-      const { data: commentRows, error: commentsError } = await serviceSupabase
+      let commentsQuery = serviceSupabase
         .from('company_comments')
         .select('company_id, rating')
-        .eq('organization_id', organizationId)
         .in('company_id', companyIds);
+
+      if (!canViewAllCompanies) {
+        commentsQuery = commentsQuery.eq('organization_id', organizationId);
+      }
+
+      const { data: commentRows, error: commentsError } = await commentsQuery;
 
       if (commentsError) {
         return NextResponse.json({ error: commentsError.message }, { status: 500 });

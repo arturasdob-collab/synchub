@@ -20,6 +20,7 @@ import { useAuth } from '@/lib/auth/AuthProvider';
 
 type Company = {
   id: string;
+  organization_id: string;
   company_code: string;
   name: string;
   vat_code: string | null;
@@ -121,12 +122,26 @@ const [checkingCode, setCheckingCode] = useState(false);
   const [commentForm, setCommentForm] = useState<any>({});
 
   useEffect(() => {
-    fetchAll();
-    fetchComments();
-  }, [companyId]);
+    if (!profile?.organization_id && !(profile as any)?.is_creator && !(profile as any)?.is_super_admin) {
+      return;
+    }
+
+    void fetchAll();
+  }, [companyId, profile?.organization_id, (profile as any)?.is_creator, (profile as any)?.is_super_admin]);
 
   const fetchAll = async () => {
-    await Promise.all([fetchCompany(), fetchContacts()]);
+    const loadedCompany = await fetchCompany();
+
+    if (!loadedCompany) {
+      setContacts([]);
+      setComments([]);
+      return;
+    }
+
+    await Promise.all([
+      fetchContacts(loadedCompany.id, loadedCompany.organization_id),
+      fetchComments(loadedCompany.id, loadedCompany.organization_id),
+    ]);
   };
 
   const createComment = async () => {
@@ -152,15 +167,19 @@ const [checkingCode, setCheckingCode] = useState(false);
     toast.success('Comment added');
     setCommentText('');
     setCommentRating(null);
-    fetchComments();
+    fetchComments(companyId, company?.organization_id ?? null);
   };
 
   const fetchCompany = async () => {
+    if (!profile) {
+      setLoading(false);
+      return null;
+    }
+
     try {
-      const { data, error } = await supabase
-        .from('companies')
-        .select(`
+      let query = supabase.from('companies').select(`
           id,
+          organization_id,
           company_code,
           name,
           cmr_insurance_number,
@@ -186,12 +205,17 @@ const [checkingCode, setCheckingCode] = useState(false);
             last_name
           )
         `)
-        .eq('id', companyId)
-        .single();
+        .eq('id', companyId);
+
+      if (!(profile as any).is_creator && !(profile as any).is_super_admin) {
+        query = query.eq('organization_id', profile.organization_id);
+      }
+
+      const { data, error } = await query.single();
 
       if (error) {
-        toast.error('Failed to load company');
-        return;
+        setCompany(null);
+        return null;
       }
 
       const normalized = {
@@ -219,19 +243,28 @@ const [checkingCode, setCheckingCode] = useState(false);
 
       setCompany(data as Company);
       setForm(normalized);
+      return data as Company;
     } catch (error) {
       console.error('COMPANY DETAILS ERROR:', error);
       toast.error('Failed to load company');
+      setCompany(null);
+      return null;
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchContacts = async () => {
+  const fetchContacts = async (targetCompanyId: string, organizationId: string | null) => {
+    if (!organizationId) {
+      setContacts([]);
+      return;
+    }
+
     const { data, error } = await supabase
       .from('company_contacts')
       .select('*')
-      .eq('company_id', companyId)
+      .eq('company_id', targetCompanyId)
+      .eq('organization_id', organizationId)
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -242,14 +275,20 @@ const [checkingCode, setCheckingCode] = useState(false);
     setContacts((data || []) as CompanyContact[]);
   };
 
-  const fetchComments = async () => {
+  const fetchComments = async (targetCompanyId: string, organizationId: string | null) => {
+    if (!organizationId) {
+      setComments([]);
+      return;
+    }
+
     const { data, error } = await supabase
       .from('company_comments')
       .select(`
         *,
         user_profiles(first_name,last_name)
       `)
-      .eq('company_id', companyId)
+      .eq('company_id', targetCompanyId)
+      .eq('organization_id', organizationId)
       .order('created_at', { ascending: false });
 
     if (!error && data) {
@@ -270,7 +309,8 @@ const [checkingCode, setCheckingCode] = useState(false);
         const { error: ratingUpdateError } = await supabase
           .from('companies')
           .update({ rating: avg })
-          .eq('id', companyId);
+          .eq('id', targetCompanyId)
+          .eq('organization_id', organizationId);
 
         if (ratingUpdateError) {
           console.error('RATING UPDATE ERROR:', ratingUpdateError);
@@ -465,7 +505,7 @@ const [checkingCode, setCheckingCode] = useState(false);
       notes: '',
     });
 
-    fetchContacts();
+    fetchContacts(companyId, company?.organization_id ?? null);
   };
 
   const saveContact = async () => {
@@ -490,7 +530,7 @@ const [checkingCode, setCheckingCode] = useState(false);
     toast.success('Contact updated');
     setEditingContact(null);
     setContactForm({});
-    fetchContacts();
+    fetchContacts(companyId, company?.organization_id ?? null);
   };
 
   const creatorData = Array.isArray(company?.creator)
@@ -1374,7 +1414,7 @@ const [checkingCode, setCheckingCode] = useState(false);
                             }
 
                             toast.success('Contact deleted');
-                            fetchContacts();
+                            fetchContacts(companyId, company?.organization_id ?? null);
                           }}
                           className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50"
                         >
@@ -1577,7 +1617,7 @@ const [checkingCode, setCheckingCode] = useState(false);
                         toast.success('Comment updated');
                         setEditingCommentId(null);
                         setCommentForm({});
-                        fetchComments();
+                        fetchComments(companyId, company?.organization_id ?? null);
                       }}
                       className="bg-slate-900 text-white px-4 py-2 rounded-md"
                     >
@@ -1647,7 +1687,7 @@ const [checkingCode, setCheckingCode] = useState(false);
                               }
 
                               toast.success('Comment deleted');
-                              fetchComments();
+                              fetchComments(companyId, company?.organization_id ?? null);
                             }}
                             className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50"
                           >

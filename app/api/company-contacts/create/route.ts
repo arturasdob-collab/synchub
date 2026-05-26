@@ -54,34 +54,40 @@ export async function POST(req: Request) {
 
   const { data: profile } = await serviceSupabase
     .from('user_profiles')
-    .select('organization_id')
+    .select('organization_id, is_super_admin, is_creator')
     .eq('id', user.id)
     .single();
 
-  if (!profile?.organization_id) {
+  if (!profile) {
     return NextResponse.json(
-      { error: 'User organization not found' },
+      { error: 'Profile not found' },
       { status: 400 }
     );
   }
 
-  const { data: company } = await serviceSupabase
+  const canManageAllCompanies = !!profile.is_super_admin || !!profile.is_creator;
+
+  let companyQuery = serviceSupabase
     .from('companies')
     .select('id, organization_id')
-    .eq('id', company_id)
-    .eq('organization_id', profile.organization_id)
-    .single();
+    .eq('id', company_id);
+
+  if (!canManageAllCompanies) {
+    companyQuery = companyQuery.eq('organization_id', profile.organization_id);
+  }
+
+  const { data: company } = await companyQuery.single();
 
   if (!company) {
     return NextResponse.json(
-      { error: 'Company not found in your organization' },
+      { error: 'Company not found' },
       { status: 404 }
     );
   }
 
   const { data, error } = await serviceSupabase.from('company_contacts').insert({
     company_id,
-    organization_id: profile.organization_id,
+    organization_id: company.organization_id,
     first_name,
     last_name,
     position,
