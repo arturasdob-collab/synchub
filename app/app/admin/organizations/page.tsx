@@ -98,6 +98,7 @@ export default function AdminOrganizationsPage() {
   const [organizations, setOrganizations] = useState<OrganizationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewerUserId, setViewerUserId] = useState('');
+  const [canCreateOrganizations, setCanCreateOrganizations] = useState(false);
   const [filtersHydrated, setFiltersHydrated] = useState(false);
   const [filters, setFilters] = useState<OrganizationsFilters>(DEFAULT_FILTERS);
   const [activeHeaderFilter, setActiveHeaderFilter] =
@@ -218,10 +219,12 @@ export default function AdminOrganizationsPage() {
 
       setOrganizations(data?.organizations ?? []);
       setViewerUserId(data?.viewer_user_id ?? '');
+      setCanCreateOrganizations(!!data?.can_create);
     } catch (error) {
       console.error('FETCH ORGANIZATIONS PAGE ERROR:', error);
       toast.error('Failed to load organizations');
       setOrganizations([]);
+      setCanCreateOrganizations(false);
     } finally {
       setLoading(false);
     }
@@ -331,14 +334,16 @@ export default function AdminOrganizationsPage() {
             Reset filters
           </button>
 
-          <button
-            type="button"
-            onClick={() => router.push('/app/admin/organizations/new')}
-            className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
-          >
-            <Plus size={16} />
-            Add Organization
-          </button>
+          {canCreateOrganizations ? (
+            <button
+              type="button"
+              onClick={() => router.push('/app/admin/organizations/new')}
+              className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
+            >
+              <Plus size={16} />
+              Add Organization
+            </button>
+          ) : null}
         </div>
       </div>
 

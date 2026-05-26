@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import {
+  inferOrganizationWorkspaceMode,
+  isFullInternalWorkspaceMode,
+  normalizeOrganizationWorkspaceMode,
+} from '@/lib/constants/organization-workspace';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -45,7 +50,9 @@ export async function POST(req: NextRequest) {
 
     const { data: callerProfile, error: callerProfileErr } = await adminClient
       .from('user_profiles')
-      .select('id, email, disabled, is_super_admin, is_creator, first_name, last_name')
+      .select(
+        'id, email, disabled, is_super_admin, is_creator, role, organization_id, first_name, last_name'
+      )
       .eq('id', caller.id)
       .maybeSingle();
 
@@ -55,10 +62,6 @@ export async function POST(req: NextRequest) {
 
     if (callerProfile.disabled) {
       return NextResponse.json({ error: 'Account disabled' }, { status: 403 });
-    }
-
-    if (!callerProfile.is_super_admin && !callerProfile.is_creator) {
-      return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
     }
 
     const body = await req.json();
@@ -74,6 +77,9 @@ export async function POST(req: NextRequest) {
     const contactPhone = normalizeNullableString(body?.contact_phone ?? body?.contactPhone);
     const contactEmail = normalizeNullableString(body?.contact_email ?? body?.contactEmail);
     const notes = normalizeNullableString(body?.notes);
+    const requestedWorkspaceMode = normalizeOrganizationWorkspaceMode(
+      body?.workspace_mode ?? body?.workspaceMode
+    );
 
     if (!organizationId) {
       return NextResponse.json({ error: 'organizationId is required' }, { status: 400 });
@@ -89,12 +95,24 @@ export async function POST(req: NextRequest) {
 
     const { data: existingOrg, error: existingOrgErr } = await adminClient
       .from('organizations')
-      .select('id, name')
+      .select('id, name, workspace_mode')
       .eq('id', organizationId)
       .maybeSingle();
 
     if (existingOrgErr || !existingOrg) {
       return NextResponse.json({ error: 'Organization not found' }, { status: 404 });
+    }
+
+    const isGlobalOrganizationAdmin =
+      callerProfile.is_super_admin || callerProfile.is_creator;
+    const canManageOwnFullInternalOrganization =
+      !isGlobalOrganizationAdmin &&
+      ['OWNER', 'ADMIN'].includes(callerProfile.role || '') &&
+      callerProfile.organization_id === existingOrg.id &&
+      isFullInternalWorkspaceMode(existingOrg.workspace_mode);
+
+    if (!isGlobalOrganizationAdmin && !canManageOwnFullInternalOrganization) {
+      return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
     }
 
     const { data: duplicateOrg, error: duplicateErr } = await adminClient
@@ -135,6 +153,12 @@ export async function POST(req: NextRequest) {
         city,
         postal_code: postalCode,
         country,
+        workspace_mode:
+          isGlobalOrganizationAdmin
+            ? requestedWorkspaceMode ||
+              existingOrg.workspace_mode ||
+              inferOrganizationWorkspaceMode(name)
+            : existingOrg.workspace_mode,
         contact_phone: contactPhone,
         contact_email: contactEmail,
         notes,

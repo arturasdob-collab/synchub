@@ -1,10 +1,12 @@
 export type OrganizationType = 'company' | 'partner' | 'terminal' | 'warehouse';
+export type OrganizationWorkspaceMode = 'full_internal' | 'partner_limited';
 export type UserRole = 'OWNER' | 'ADMIN' | 'MANAGER' | 'ACCOUNTANT' | 'FINANCE';
 
 export interface Organization {
   id: string;
   name: string;
   type: OrganizationType | null;
+  workspace_mode: OrganizationWorkspaceMode;
   company_code: string | null;
   vat_code: string | null;
   address: string | null;

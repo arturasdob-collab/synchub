@@ -287,6 +287,7 @@ export default function OrganizationDetailsPage() {
   const [warehouses, setWarehouses] = useState<WarehouseRow[]>([]);
   const [pendingInvitesCount, setPendingInvitesCount] = useState(0);
   const [canManage, setCanManage] = useState(false);
+  const [canDelete, setCanDelete] = useState(false);
   const [form, setForm] = useState<OrganizationForm>(EMPTY_FORM);
   const [warehouseForm, setWarehouseForm] =
     useState<WarehouseForm>(EMPTY_WAREHOUSE_FORM);
@@ -346,6 +347,7 @@ export default function OrganizationDetailsPage() {
       setWarehouses(data.warehouses ?? []);
       setPendingInvitesCount(data.pending_invites_count ?? 0);
       setCanManage(!!data.can_manage);
+      setCanDelete(!!data.can_delete);
 
       if (data.organization) {
         setForm(normalizeFormFromOrganization(data.organization));
@@ -701,10 +703,12 @@ export default function OrganizationDetailsPage() {
                     <Pencil size={16} />
                     Edit
                   </button>
-                  <button type="button" onClick={handleDelete} disabled={deleting} className="inline-flex items-center gap-2 rounded-md border border-red-200 px-4 py-2 text-red-600 hover:bg-red-50 disabled:opacity-50">
-                    <Trash2 size={16} />
-                    {deleting ? 'Deleting...' : 'Delete'}
-                  </button>
+                  {canDelete ? (
+                    <button type="button" onClick={handleDelete} disabled={deleting} className="inline-flex items-center gap-2 rounded-md border border-red-200 px-4 py-2 text-red-600 hover:bg-red-50 disabled:opacity-50">
+                      <Trash2 size={16} />
+                      {deleting ? 'Deleting...' : 'Delete'}
+                    </button>
+                  ) : null}
                 </>
               )}
             </div>

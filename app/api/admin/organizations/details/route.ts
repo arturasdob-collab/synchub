@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { isFullInternalWorkspaceMode } from '@/lib/constants/organization-workspace';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -35,7 +36,7 @@ export async function GET(req: NextRequest) {
 
     const { data: callerProfile, error: profileErr } = await adminClient
       .from('user_profiles')
-      .select('disabled, is_super_admin, is_creator, role')
+      .select('disabled, is_super_admin, is_creator, role, organization_id')
       .eq('id', caller.id)
       .maybeSingle();
 
@@ -47,13 +48,12 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Account disabled' }, { status: 403 });
     }
 
-    const canViewOrganizations =
-      callerProfile.is_super_admin ||
-      callerProfile.is_creator ||
-      callerProfile.role === 'OWNER' ||
-      callerProfile.role === 'ADMIN';
+    const isGlobalOrganizationAdmin =
+      callerProfile.is_super_admin || callerProfile.is_creator;
+    const isLocalOrganizationAdmin =
+      callerProfile.role === 'OWNER' || callerProfile.role === 'ADMIN';
 
-    if (!canViewOrganizations) {
+    if (!isGlobalOrganizationAdmin && !isLocalOrganizationAdmin) {
       return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
     }
 
@@ -76,6 +76,7 @@ export async function GET(req: NextRequest) {
           id,
           name,
           type,
+          workspace_mode,
           company_code,
           vat_code,
           address,
@@ -100,6 +101,16 @@ export async function GET(req: NextRequest) {
 
     if (!organization) {
       return NextResponse.json({ error: 'Organization not found' }, { status: 404 });
+    }
+
+    const canManageOwnFullInternalOrganization =
+      !isGlobalOrganizationAdmin &&
+      isLocalOrganizationAdmin &&
+      callerProfile.organization_id === organization.id &&
+      isFullInternalWorkspaceMode(organization.workspace_mode);
+
+    if (!isGlobalOrganizationAdmin && !canManageOwnFullInternalOrganization) {
+      return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
     }
 
     const { data: employees, error: employeesError } = await adminClient
@@ -162,7 +173,8 @@ export async function GET(req: NextRequest) {
       warehouses: warehouses || [],
       pending_invites_count: pendingInvitesCount ?? 0,
       can_manage:
-        !!callerProfile.is_super_admin || !!callerProfile.is_creator,
+        !!isGlobalOrganizationAdmin || !!canManageOwnFullInternalOrganization,
+      can_delete: !!isGlobalOrganizationAdmin,
     });
   } catch (e: any) {
     return NextResponse.json(

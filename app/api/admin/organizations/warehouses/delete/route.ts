@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { isFullInternalWorkspaceMode } from '@/lib/constants/organization-workspace';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest) {
 
     const { data: callerProfile, error: callerProfileErr } = await adminClient
       .from('user_profiles')
-      .select('disabled, is_super_admin, is_creator')
+      .select('disabled, is_super_admin, is_creator, role, organization_id')
       .eq('id', caller.id)
       .maybeSingle();
 
@@ -47,15 +48,43 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Account disabled' }, { status: 403 });
     }
 
-    if (!callerProfile.is_super_admin && !callerProfile.is_creator) {
-      return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
-    }
-
     const body = await req.json();
     const warehouseId = String(body?.warehouseId || '').trim();
 
     if (!warehouseId) {
       return NextResponse.json({ error: 'warehouseId is required' }, { status: 400 });
+    }
+
+    const { data: existingWarehouse, error: existingWarehouseError } = await adminClient
+      .from('organization_warehouses')
+      .select('id, organization_id')
+      .eq('id', warehouseId)
+      .maybeSingle();
+
+    if (existingWarehouseError || !existingWarehouse) {
+      return NextResponse.json({ error: 'Warehouse not found' }, { status: 404 });
+    }
+
+    const { data: organization, error: organizationError } = await adminClient
+      .from('organizations')
+      .select('id, workspace_mode')
+      .eq('id', existingWarehouse.organization_id)
+      .maybeSingle();
+
+    if (organizationError || !organization) {
+      return NextResponse.json({ error: 'Organization not found' }, { status: 404 });
+    }
+
+    const isGlobalOrganizationAdmin =
+      callerProfile.is_super_admin || callerProfile.is_creator;
+    const canManageOwnFullInternalOrganization =
+      !isGlobalOrganizationAdmin &&
+      ['OWNER', 'ADMIN'].includes(callerProfile.role || '') &&
+      callerProfile.organization_id === organization.id &&
+      isFullInternalWorkspaceMode(organization.workspace_mode);
+
+    if (!isGlobalOrganizationAdmin && !canManageOwnFullInternalOrganization) {
+      return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
     }
 
     const { error } = await adminClient

@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import {
+  formatOrganizationWorkspaceMode,
+  isFullInternalWorkspaceMode,
+} from '@/lib/constants/organization-workspace';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -46,7 +50,7 @@ export async function GET(req: NextRequest) {
 
     const { data: callerProfile, error: profileErr } = await adminClient
       .from('user_profiles')
-      .select('disabled, is_super_admin, is_creator, role')
+      .select('disabled, is_super_admin, is_creator, role, organization_id')
       .eq('id', caller.id)
       .maybeSingle();
 
@@ -58,22 +62,49 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Account disabled' }, { status: 403 });
     }
 
-    const canViewOrganizations =
-      callerProfile.is_super_admin ||
-      callerProfile.is_creator ||
-      callerProfile.role === 'OWNER' ||
-      callerProfile.role === 'ADMIN';
+    const isGlobalOrganizationAdmin =
+      callerProfile.is_super_admin || callerProfile.is_creator;
+    const isLocalOrganizationAdmin =
+      callerProfile.role === 'OWNER' || callerProfile.role === 'ADMIN';
 
-    if (!canViewOrganizations) {
+    if (!isGlobalOrganizationAdmin && !isLocalOrganizationAdmin) {
       return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
     }
 
-    const { data: organizations, error: organizationsError } = await adminClient
+    let organizationsQuery = adminClient
       .from('organizations')
       .select(
-        'id, name, type, company_code, address, city, postal_code, country, created_at'
+        'id, name, type, workspace_mode, company_code, address, city, postal_code, country, created_at'
       )
       .order('name', { ascending: true });
+
+    let canCreateOrganizations = false;
+
+    if (isGlobalOrganizationAdmin) {
+      canCreateOrganizations = true;
+    } else {
+      if (!callerProfile.organization_id) {
+        return NextResponse.json({ error: 'Organization not found' }, { status: 403 });
+      }
+
+      const { data: callerOrganization, error: callerOrganizationError } = await adminClient
+        .from('organizations')
+        .select('id, workspace_mode')
+        .eq('id', callerProfile.organization_id)
+        .maybeSingle();
+
+      if (callerOrganizationError || !callerOrganization) {
+        return NextResponse.json({ error: 'Organization not found' }, { status: 403 });
+      }
+
+      if (!isFullInternalWorkspaceMode(callerOrganization.workspace_mode)) {
+        return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+      }
+
+      organizationsQuery = organizationsQuery.eq('id', callerOrganization.id);
+    }
+
+    const { data: organizations, error: organizationsError } = await organizationsQuery;
 
     if (organizationsError) {
       return NextResponse.json(
@@ -115,6 +146,7 @@ export async function GET(req: NextRequest) {
         return {
           ...org,
           display_type: formatOrganizationType(org.type ?? null),
+          display_workspace_mode: formatOrganizationWorkspaceMode(org.workspace_mode),
           users_count: usersCount ?? 0,
           pending_invites_count: invitesCount ?? 0,
         };
@@ -124,6 +156,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(
       {
         viewer_user_id: caller.id,
+        can_create: canCreateOrganizations,
         organizations: organizationsWithCounts,
       },
       { status: 200 }

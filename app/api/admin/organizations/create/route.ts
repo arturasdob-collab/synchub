@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import {
+  inferOrganizationWorkspaceMode,
+  normalizeOrganizationWorkspaceMode,
+} from '@/lib/constants/organization-workspace';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -73,6 +77,9 @@ export async function POST(req: NextRequest) {
     const contactPhone = normalizeNullableString(body?.contact_phone ?? body?.contactPhone);
     const contactEmail = normalizeNullableString(body?.contact_email ?? body?.contactEmail);
     const notes = normalizeNullableString(body?.notes);
+    const requestedWorkspaceMode = normalizeOrganizationWorkspaceMode(
+      body?.workspace_mode ?? body?.workspaceMode
+    );
 
     if (!name) {
       return NextResponse.json({ error: 'Organization name is required' }, { status: 400 });
@@ -119,6 +126,7 @@ export async function POST(req: NextRequest) {
         city,
         postal_code: postalCode,
         country,
+        workspace_mode: requestedWorkspaceMode || inferOrganizationWorkspaceMode(name),
         contact_phone: contactPhone,
         contact_email: contactEmail,
         notes,
