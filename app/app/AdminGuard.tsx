@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth/AuthProvider';
+import { isFullInternalWorkspaceMode } from '@/lib/constants/organization-workspace';
 
 export function AdminGuard({ children }: { children: React.ReactNode }) {
   const { profile, loading } = useAuth();
@@ -20,8 +21,8 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
     profile?.role === 'ADMIN';
   
   const isCompaniesPath = pathname?.startsWith('/app/companies');
-  const organizationName = ((profile as any)?.organizations?.name ?? '').trim().toLowerCase();
-  const isPartnerOrg = organizationName !== 'tempus trans';
+  const workspaceMode = (profile as any)?.organizations?.workspace_mode ?? null;
+  const isPartnerOrg = !isFullInternalWorkspaceMode(workspaceMode);
 
   useEffect(() => {
     if (isAdminPath && !loading && profile) {

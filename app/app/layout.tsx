@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { LayoutDashboard, Users, Settings, Menu, Building2, FileText, LogOut, ShieldCheck, Truck, GitBranch } from 'lucide-react';
 import { useState } from 'react';
 import { AdminGuard } from './AdminGuard';
+import { isFullInternalWorkspaceMode } from '@/lib/constants/organization-workspace';
 
 function AppLayoutContent({ children }: { children: React.ReactNode }) {
   const { user, profile, loading, signOut } = useAuth();
@@ -19,8 +20,9 @@ function AppLayoutContent({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const isAdmin = profile?.is_super_admin || profile?.role === 'OWNER' || profile?.role === 'ADMIN';
-  const organizationName = ((profile as any)?.organizations?.name ?? '').trim().toLowerCase();
-  const isPartnerOrg = organizationName !== 'tempus trans';
+  const workspaceMode = (profile as any)?.organizations?.workspace_mode ?? null;
+  const isFullInternalOrg = isFullInternalWorkspaceMode(workspaceMode);
+  const isPartnerOrg = !isFullInternalOrg;
 
   useEffect(() => {
     // Don't do anything while still loading
@@ -83,7 +85,9 @@ function AppLayoutContent({ children }: { children: React.ReactNode }) {
       ];
 
 const canViewAuditLog =
-  !!profile && ((profile as any).is_super_admin || (profile as any).is_creator);
+  !!profile &&
+  (((profile as any).is_super_admin || (profile as any).is_creator) ||
+    (isFullInternalOrg && (profile.role === 'OWNER' || profile.role === 'ADMIN')));
 
 const adminNavigation =
   isAdmin && !isPartnerOrg

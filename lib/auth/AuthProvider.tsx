@@ -14,6 +14,7 @@ type ExtendedUserProfile = UserProfile & {
     id: string;
     name: string;
     type: string | null;
+    workspace_mode?: string | null;
   } | null;
 };
 
@@ -46,7 +47,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         is_creator,
 organizations (
   id,
-  name
+  name,
+  workspace_mode
 )
       `)
       .eq('id', userId)

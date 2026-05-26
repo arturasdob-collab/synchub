@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { cookies } from 'next/headers';
 import { createServerClient } from '@supabase/auth-helpers-nextjs';
+import { isFullInternalWorkspaceMode } from '@/lib/constants/organization-workspace';
 
 type AuditUser = {
   id: string;
@@ -49,17 +50,27 @@ export default async function AuditLogPage() {
 
   const { data: profile } = await supabase
     .from('user_profiles')
-    .select('id, email, is_super_admin, is_creator')
+    .select('id, email, role, organization_id, is_super_admin, is_creator, organizations(id, workspace_mode)')
     .eq('id', user.id)
     .single();
 
-    if (!profile || (!profile.is_super_admin && !profile.is_creator)) {
-      redirect('/app/admin/users');
-    }
+  const profileOrganization = Array.isArray((profile as any)?.organizations)
+    ? (profile as any).organizations[0] ?? null
+    : (profile as any)?.organizations ?? null;
 
-  const { data, error } = await supabase
-  .from('audit_logs')
-  .select(`
+  const isGlobalAuditViewer = !!profile?.is_super_admin || !!profile?.is_creator;
+  const isLocalAuditViewer =
+    !!profile &&
+    (profile.role === 'OWNER' || profile.role === 'ADMIN') &&
+    isFullInternalWorkspaceMode(profileOrganization?.workspace_mode);
+
+  if (!profile || (!isGlobalAuditViewer && !isLocalAuditViewer)) {
+    redirect('/app/admin/users');
+  }
+
+  let auditLogsQuery = supabase
+    .from('audit_logs')
+    .select(`
     id,
     action,
     details,
@@ -84,8 +95,14 @@ export default async function AuditLogPage() {
       last_name
     )
   `)
-  .order('created_at', { ascending: false })
-  .limit(100);
+    .order('created_at', { ascending: false })
+    .limit(100);
+
+  if (!isGlobalAuditViewer) {
+    auditLogsQuery = auditLogsQuery.eq('organization_id', profile.organization_id);
+  }
+
+  const { data, error } = await auditLogsQuery;
 
   const logs: AuditLogRow[] = (data ?? []) as AuditLogRow[];
   console.log('AUDIT FIRST LOG:', logs[0]);
